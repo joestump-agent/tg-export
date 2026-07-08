@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -74,3 +75,33 @@ def write_ndjson(path: str | os.PathLike[str], objects: Iterable[Any]) -> int:
             fh.write(ndjson_line(obj))
             count += 1
     return count
+
+
+@contextmanager
+def ndjson_writer(
+    path: str | os.PathLike[str], *, mode: str = "w"
+) -> Iterator[Callable[[Any], None]]:
+    """Yield an append-as-you-go writer for one chat's NDJSON file.
+
+    The exporter walks a chat and writes each mapped message the moment it is
+    produced (ADR-0003): the yielded callable serializes one object to one
+    canonical line and flushes it, so a killed run leaves a valid, truncated-at-a-
+    line-boundary partial tree that ``--since`` can resume (M5). ``mode`` defaults
+    to ``"w"`` (a fresh full run truncates any prior file); the incremental path
+    (M5) opens with ``"a"`` to append past a chat's existing lines. Every line goes
+    through :func:`ndjson_line`, so byte-stability (ADR-0004) is identical to the
+    batch writer.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fh = p.open(mode, encoding="utf-8", newline="\n")
+    try:
+
+        def write(obj: Any) -> None:
+            fh.write(ndjson_line(obj))
+            # Flush per line so a killed run never leaves a half-written record.
+            fh.flush()
+
+        yield write
+    finally:
+        fh.close()

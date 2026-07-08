@@ -62,6 +62,20 @@ class NetworkError(TgExportError):
     exit_code = EXIT_NETWORK
 
 
+class ExportError(TgExportError):
+    """A failure during the dialog walk / mapping / write pipeline.
+
+    Raised with layer-boundary context (``chat <id>: message <id>: <cause>``) when
+    a message fails to map or an emitted object fails the shipped-schema reject
+    gate. Maps to the generic runtime exit code — it is neither an auth nor a
+    network nor a usage mistake, but a genuine processing failure the caller must
+    see rather than have silently swallowed (SPEC-0001 REQ "Error Handling
+    Standards").
+    """
+
+    exit_code = EXIT_RUNTIME
+
+
 def exit_code_for(exc: BaseException) -> int:
     """Return the CLI exit code for ``exc`` (the single mapping used everywhere)."""
     if isinstance(exc, TgExportError):
