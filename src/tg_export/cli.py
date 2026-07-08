@@ -7,6 +7,9 @@ makes ``export`` (the dialog walk + NDJSON/manifest writer, delegated to
 and non-interactive. ``--version`` (M1) is unchanged. M5 makes ``--since`` (read the
 prior manifest's per-chat anchors and append only-new messages) and ``--full``
 (ignore anchors, re-export everything) real (SPEC-0001 REQ "Incremental Export").
+M6 adds ``--json-logs`` (switch structured progress/error output to one JSON object
+per line) and wires it into the logging module before the walk (SPEC-0001 REQ
+"Reliability and Rate Limits").
 
 Every command except ``login`` is non-interactive (SPEC-0001 REQ "CLI Surface").
 Domain failures raise the sentinels in :mod:`tg_export.errors`; :func:`main` maps
@@ -34,6 +37,7 @@ from .errors import (
     NotAuthorizedError,
     TgExportError,
 )
+from .logging import configure as configure_logging
 from .logging import log_event
 
 
@@ -74,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("--chats", help="comma-separated chat ids to limit the export")
     p_export.add_argument("--no-media", action="store_true", help="export metadata only")
     p_export.add_argument("--max-media-mb", type=int, help="skip media larger than N MB")
+    p_export.add_argument(
+        "--json-logs",
+        action="store_true",
+        help="emit progress/errors as one JSON object per line (machine-ingestible)",
+    )
     _add_credential_args(p_export)
 
     # chats: full behavior is M3; surface is defined here.
@@ -124,6 +133,10 @@ def _parse_chats(raw: str | None) -> frozenset[int] | None:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
+    # M6: install the structured log handler and select text vs. one-JSON-per-line
+    # output BEFORE the walk, so flood-waits, skips, and per-chat progress are
+    # emitted in the requested form (SPEC-0001 REQ "Reliability and Rate Limits").
+    configure_logging(json_logs=args.json_logs)
     credential = auth.resolve_credential(args.api_id, args.api_hash)
     # M5 incremental (SPEC-0001 REQ "Incremental Export"; ADR-0008): --since reads
     # the prior run's per-chat max_message_id anchors and appends only-new messages;
