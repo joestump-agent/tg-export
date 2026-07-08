@@ -127,6 +127,45 @@ def test_export_since_flag_flows_into_config(tmp_path, monkeypatch):
     assert captured[1].full is False
 
 
+def test_export_since_defaults_output_to_since_tree(tmp_path, monkeypatch):
+    # ADR-0008 one-evolving-tree: omitting --output on a --since run appends into
+    # the since tree rather than requiring the caller to repeat the path.
+    captured: list[export.ExportConfig] = []
+    _patch_run_export(monkeypatch, capture=captured)
+    tree = tmp_path / "tree"
+    assert cli.main(_export_argv(tmp_path / "s.session", tree)) == EXIT_OK
+    code = cli.main(
+        [
+            "export",
+            "--session",
+            str(tmp_path / "s.session"),
+            "--since",
+            str(tree),
+            "--api-id",
+            FAKE_API_ID,
+            "--api-hash",
+            FAKE_API_HASH,
+        ]
+    )
+    assert code == EXIT_OK
+    assert captured[1].output == tree
+    assert captured[1].since == tree
+
+
+def test_export_since_with_different_output_is_malformed(tmp_path, capsys):
+    # Appending into a tree other than the --since tree would drop prior lines and
+    # silently produce an incomplete archive — refuse it with the arg exit code.
+    code = cli.main(
+        _export_argv(
+            tmp_path / "s.session", tmp_path / "other", "--since", str(tmp_path / "prev")
+        )
+    )
+    assert code == EXIT_MALFORMED_ARG
+    err = capsys.readouterr().err
+    assert "--since" in err
+    assert "same tree" in err
+
+
 def test_export_bad_chats_filter_is_malformed(tmp_path, capsys):
     code = cli.main(_export_argv(tmp_path / "s.session", tmp_path / "out", "--chats", "not-an-id"))
     assert code == EXIT_MALFORMED_ARG

@@ -207,7 +207,15 @@ def _prior_anchors(since_dir: Path) -> dict[int, int]:
         raise MalformedArgumentError(
             f"tg-export: --since {since_dir}: cannot read manifest.json: {exc}"
         ) from exc
-    return {int(chat["id"]): int(chat["max_message_id"]) for chat in manifest.get("chats", [])}
+    try:
+        # A prior manifest that parses as JSON but is structurally wrong (not the
+        # expected shape, or a chat entry lacking max_message_id) is still a usage
+        # mistake, not a generic runtime crash — keep it on the greppable arg code.
+        return {int(chat["id"]): int(chat["max_message_id"]) for chat in manifest.get("chats", [])}
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MalformedArgumentError(
+            f"tg-export: --since {since_dir}: manifest chat entry missing max_message_id"
+        ) from exc
 
 
 def _read_chat_messages(output: Path, chat_id: int) -> list[dict[str, Any]]:
@@ -220,7 +228,22 @@ def _read_chat_messages(output: Path, chat_id: int) -> list[dict[str, Any]]:
     path = output / "chats" / f"{chat_id}.ndjson"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    objects: list[dict[str, Any]] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line:
+            continue
+        try:
+            objects.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            # A pre-existing half-written/corrupt prior line (e.g. after a SIGKILL
+            # mid-write) must surface with chat/line context rather than a raw decode
+            # error. M6 will upgrade this to best-effort skip-and-continue; for now it
+            # fails loudly but greppably (SPEC-0001 REQ "Error Handling Standards").
+            raise ExportError(
+                f"chat {chat_id}: prior NDJSON line {lineno} is malformed: {exc}",
+                chat=chat_id,
+            ) from exc
+    return objects
 
 
 # --- the walk ----------------------------------------------------------------

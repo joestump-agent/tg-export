@@ -26,7 +26,7 @@ import pytest
 
 from synthetic import GENERATED_AT, FakeTelegramClient, Msg, User, _dt
 from tg_export import export, jsonio, mapping, schemas
-from tg_export.errors import MalformedArgumentError
+from tg_export.errors import ExportError, MalformedArgumentError
 
 SELF_ID = 424242
 ACCOUNT = {"id": SELF_ID, "username": "trailmix", "phone_last4": "6789"}
@@ -225,3 +225,43 @@ def test_since_missing_manifest_raises_malformed_argument(tmp_path: Path):
     with pytest.raises(MalformedArgumentError) as exc:
         _run(client, export.ExportConfig(output=tmp_path / "out", since=tmp_path / "nope"))
     assert "--since" in str(exc.value)
+
+
+def test_since_structurally_broken_manifest_is_malformed_argument(tmp_path: Path):
+    # Valid JSON, but a chat entry lacks max_message_id -> a KeyError must NOT escape
+    # to the generic runtime code; it stays a greppable malformed-argument error.
+    since = tmp_path / "prev"
+    since.mkdir()
+    jsonio.write_manifest(
+        since / "manifest.json",
+        {
+            "schema_version": 1,
+            "tool": "tg-export",
+            "chats": [{"id": 3003, "type": "supergroup"}],  # no max_message_id
+        },
+    )
+    client = RecordingClient({3003: _chat_meta(3003, [_msg(1)])})
+    with pytest.raises(MalformedArgumentError) as exc:
+        _run(client, export.ExportConfig(output=since, since=since))
+    assert "max_message_id" in str(exc.value)
+
+
+def test_corrupt_prior_ndjson_line_surfaces_contextual_error(tmp_path: Path):
+    # A half-written/corrupt prior line (e.g. after a SIGKILL) must surface with
+    # chat + line-number context, not a bare JSONDecodeError (M6 upgrades to skip).
+    tree = tmp_path / "tree"
+    first = RecordingClient({3003: _chat_meta(3003, [_msg(1), _msg(2)])})
+    _run(first, export.ExportConfig(output=tree, generated_at=GENERATED_AT))
+
+    ndjson = tree / "chats" / "3003.ndjson"
+    # Replace the second prior line with a truncated (corrupt) JSON object.
+    good_first = _read_lines(ndjson)[0]
+    ndjson.write_text(good_first + "\n" + '{"id": 2, "chat_id"\n', encoding="utf-8")
+
+    second = RecordingClient({3003: _chat_meta(3003, [_msg(1), _msg(2), _msg(3)])})
+    with pytest.raises(ExportError) as exc:
+        _run(second, export.ExportConfig(output=tree, since=tree, generated_at=GENERATED_AT))
+    message = str(exc.value)
+    assert "chat 3003:" in message
+    assert "line 2" in message
+    assert "malformed" in message

@@ -125,17 +125,31 @@ def _parse_chats(raw: str | None) -> frozenset[int] | None:
 
 def _cmd_export(args: argparse.Namespace) -> int:
     credential = auth.resolve_credential(args.api_id, args.api_hash)
-    if not args.output:
-        raise MalformedArgumentError("tg-export: export requires --output <dir>")
     # M5 incremental (SPEC-0001 REQ "Incremental Export"; ADR-0008): --since reads
     # the prior run's per-chat max_message_id anchors and appends only-new messages;
     # --full ignores all anchors and re-exports everything (and wins over --since).
+    since = Path(args.since) if args.since else None
+    output = Path(args.output) if args.output else None
+    if output is None:
+        if since is None:
+            raise MalformedArgumentError("tg-export: export requires --output <dir>")
+        # ADR-0008 "one evolving tree": an append-in-place --since run resumes the
+        # SAME tree it read anchors from, so default --output to the --since dir.
+        output = since
+    elif since is not None and not args.full and output.resolve() != since.resolve():
+        # Appending into a different tree would silently drop the prior lines and
+        # leave an internally-consistent-looking but INCOMPLETE archive. Refuse it
+        # loudly. (--full re-exports everything, so a distinct output is fine there.)
+        raise MalformedArgumentError(
+            f"tg-export: --since {since} requires --output to be the same tree "
+            "(or omit --output)"
+        )
     config = export.ExportConfig(
-        output=Path(args.output),
+        output=output,
         chats=_parse_chats(args.chats),
         no_media=args.no_media,
         max_media_mb=args.max_media_mb,
-        since=Path(args.since) if args.since else None,
+        since=since,
         full=args.full,
     )
     manifest = export.run_export(config, session=args.session, credential=credential)
@@ -143,7 +157,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     # Summary carries only counts and the output path — never a message body.
     print(
         f"tg-export: exported {len(manifest['chats'])} chats, {total} messages "
-        f"to {args.output}",
+        f"to {output}",
         file=sys.stderr,
     )
     return EXIT_OK
