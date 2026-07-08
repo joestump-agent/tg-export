@@ -1,0 +1,73 @@
+# Governing: ADR-0010 (distribution: pure-Python, src layout, pinned deps, console script);
+#            SPEC-0001 REQ "Packaging and Distribution"
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-export"
+description = "A standalone Telethon CLI that exports a Telegram account's history into an ingestion-ready JSON archive for msgbrowse."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Joe Stump" }]
+keywords = ["telegram", "telethon", "export", "msgbrowse", "ndjson"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Utilities",
+]
+# Runtime deps pinned to exact versions (ADR-0010): pure-Python, small tree.
+dependencies = [
+    "telethon==1.36.0",
+    "platformdirs==4.3.6",
+    "jsonschema==4.23.0",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/joestump-agent/tg-export"
+Repository = "https://github.com/joestump-agent/tg-export"
+Issues = "https://github.com/joestump-agent/tg-export/issues"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+    "pytest>=8.0.0",
+    "build>=1.2.0",
+]
+
+[project.scripts]
+tg-export = "tg_export.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The JSON Schema files ship inside the package so msgbrowse validates against
+# the same contract (ADR-0004, SPEC-0001 REQ "Packaging and Distribution").
+[tool.setuptools.package-data]
+tg_export = ["schema/*.json"]
+
+# Single source of truth for the version lives in tg_export.__version__.
+[tool.setuptools.dynamic]
+version = { attr = "tg_export.__version__" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

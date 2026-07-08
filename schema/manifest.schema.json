@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joestump-agent/tg-export/schema/manifest.schema.json",
+  "title": "tg-export manifest",
+  "description": "The manifest.json at the root of an export tree. Governs SPEC-0001 REQ \"JSON Output Contract\". schema_version 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "tool_version",
+    "generated_at",
+    "account",
+    "chats"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Integer major version of the contract; a bump is a coordinated change on both tg-export and msgbrowse."
+    },
+    "tool": {
+      "type": "string",
+      "const": "tg-export",
+      "description": "Literal producing-tool identifier."
+    },
+    "tool_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.-].+)?$",
+      "description": "Semver of the tool (matches tg_export.__version__)."
+    },
+    "generated_at": {
+      "type": "integer",
+      "description": "Export time, Unix seconds UTC."
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Self user id of the exporting account."
+        },
+        "username": {
+          "type": ["string", "null"],
+          "description": "Self @username without the leading @, or null."
+        },
+        "phone_last4": {
+          "type": ["string", "null"],
+          "maxLength": 4,
+          "description": "At most the last 4 digits of the phone number; MUST NOT contain the full number."
+        }
+      }
+    },
+    "chats": {
+      "type": "array",
+      "description": "Per-chat index; MAY be empty.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "title",
+          "message_count",
+          "max_message_id",
+          "file"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Chat id."
+          },
+          "type": {
+            "type": "string",
+            "enum": ["private", "group", "supergroup", "channel", "self"],
+            "description": "Chat classification."
+          },
+          "title": {
+            "type": "string",
+            "description": "Chat display title."
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of messages exported for this chat."
+          },
+          "max_message_id": {
+            "type": "integer",
+            "description": "Highest exported message id; the incremental --since anchor."
+          },
+          "file": {
+            "type": "string",
+            "description": "Relative path to the chat's NDJSON, e.g. \"chats/777000.ndjson\"."
+          },
+          "username": {
+            "type": ["string", "null"],
+            "description": "Chat @username without the leading @, or null."
+          },
+          "min_date": {
+            "type": ["integer", "null"],
+            "description": "Earliest exported message date, Unix seconds UTC, or null."
+          },
+          "max_date": {
+            "type": ["integer", "null"],
+            "description": "Latest exported message date, Unix seconds UTC, or null."
+          }
+        }
+      }
+    }
+  }
+}
