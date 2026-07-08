@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joestump-agent/tg-export/schema/message.schema.json",
+  "title": "tg-export NDJSON message object",
+  "description": "One line of a chats/<chat_id>.ndjson file. Governs SPEC-0001 REQ \"JSON Output Contract\" and \"Message Mapping Fidelity\". schema_version 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "chat_id", "date", "kind", "from", "text"],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "description": "Telegram message id (incremental anchor within the chat)."
+    },
+    "chat_id": {
+      "type": "integer",
+      "description": "Id of the owning chat."
+    },
+    "date": {
+      "type": "integer",
+      "description": "Canonical timestamp: Unix seconds, UTC."
+    },
+    "edit_date": {
+      "type": ["integer", "null"],
+      "description": "Unix seconds, UTC, of the last edit; null when never edited."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["message", "service"],
+      "description": "message = user/content message; service = a system event."
+    },
+    "from": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "is_self"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Resolved sender display name; \"Unknown\" when unresolved."
+        },
+        "is_self": {
+          "type": "boolean",
+          "description": "True when the sender is the exporting account."
+        },
+        "id": {
+          "type": ["integer", "null"],
+          "description": "Sender user id; null for anonymous admins / channel posts / unresolved."
+        },
+        "username": {
+          "type": ["string", "null"],
+          "description": "Sender @username without the leading @, or null."
+        }
+      }
+    },
+    "text": {
+      "type": "string",
+      "description": "Flattened visible text (media captions included); \"\" when none."
+    },
+    "entities": {
+      "type": "array",
+      "description": "Resolved link entities only. Never carries UTF-16 offsets (ADR-0005).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "url"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["url", "text_link"],
+            "description": "Link entity type."
+          },
+          "url": {
+            "type": "string",
+            "description": "Resolved absolute URL."
+          }
+        }
+      }
+    },
+    "reply_to_message_id": {
+      "type": ["integer", "null"],
+      "description": "Id of the message this replies to, or null."
+    },
+    "forward": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["from_name"],
+      "properties": {
+        "from_name": {
+          "type": "string",
+          "description": "Display name of the original author."
+        },
+        "from_id": {
+          "type": ["integer", "null"],
+          "description": "Original author id, or null when unknown/anonymous."
+        },
+        "date": {
+          "type": ["integer", "null"],
+          "description": "Original message date, Unix seconds UTC, or null."
+        }
+      }
+    },
+    "reactions": {
+      "type": "array",
+      "description": "Aggregate reaction counts.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["emoji", "count"],
+        "properties": {
+          "emoji": {
+            "type": "string",
+            "description": "Reaction emoji (or custom-emoji document id as a string)."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of reactions of this emoji."
+          }
+        }
+      }
+    },
+    "media": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["kind", "mime", "size"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "photo",
+            "video",
+            "voice",
+            "video_note",
+            "audio",
+            "sticker",
+            "animation",
+            "document"
+          ],
+          "description": "Media classification."
+        },
+        "mime": {
+          "type": "string",
+          "description": "MIME type."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "File size in bytes."
+        },
+        "path": {
+          "type": ["string", "null"],
+          "description": "Relative path media/<chat_id>/<message_id>[_<n>].<ext>; null when not downloaded."
+        },
+        "skipped": {
+          "type": "boolean",
+          "description": "True when the file was skipped (e.g. exceeded --max-media-mb)."
+        },
+        "width": {
+          "type": ["integer", "null"],
+          "description": "Pixel width where cheaply available."
+        },
+        "height": {
+          "type": ["integer", "null"],
+          "description": "Pixel height where cheaply available."
+        },
+        "duration": {
+          "type": ["number", "null"],
+          "description": "Duration in seconds where cheaply available."
+        },
+        "filename": {
+          "type": ["string", "null"],
+          "description": "Original filename where cheaply available."
+        }
+      }
+    },
+    "action": {
+      "type": ["object", "null"],
+      "description": "Service-event descriptor; present only when kind == service.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Service action type (e.g. chat_joined, pin_message, phone_call, chat_edit_photo)."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "service" } }
+      },
+      "then": {
+        "required": ["action"],
+        "properties": { "action": { "type": "object" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "message" } }
+      },
+      "then": {
+        "properties": { "action": { "type": "null" } }
+      }
+    }
+  ]
+}
