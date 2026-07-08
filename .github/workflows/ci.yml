@@ -1,0 +1,85 @@
+# Governing: SPEC-0001 REQ "Testing", REQ "Packaging and Distribution"; ADR-0010
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: lint + test + build (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (editable + dev)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Ruff (lint)
+        run: ruff check .
+
+      - name: Pytest (offline, synthetic)
+        run: python -m pytest -q
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Assert schema files ship in the wheel
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = sorted(glob.glob("dist/*.whl"))[-1]
+          names = zipfile.ZipFile(wheel).namelist()
+          for needed in ("manifest.schema.json", "message.schema.json"):
+              assert any(needed in n for n in names), f"{needed} missing from wheel: {names}"
+          print("schema files present in", wheel)
+          PY
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-py${{ matrix.python-version }}
+          path: dist/*
+
+  # Wired now, exercised at M7. Builds and (placeholder) publishes on a tag push.
+  # Keeps the non-release path secret-free; real publish is enabled at release time.
+  release:
+    name: release (tag)
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish (placeholder — enabled at M7)
+        run: |
+          echo "Release job wired; wheel publishing is enabled at milestone M7."
+          ls -l dist
