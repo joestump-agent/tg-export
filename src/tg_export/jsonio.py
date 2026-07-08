@@ -61,6 +61,17 @@ def write_manifest(path: str | os.PathLike[str], manifest: dict[str, Any]) -> No
     p.write_text(dumps(manifest) + "\n", encoding="utf-8")
 
 
+def read_manifest(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Read and parse a ``manifest.json`` written by :func:`write_manifest`.
+
+    The counterpart the incremental ``--since`` path (M5, ADR-0008) uses to recover
+    the prior run's per-chat ``max_message_id`` anchors. Raises ``OSError`` if the
+    file is absent and ``ValueError`` (``json.JSONDecodeError``) if it is malformed;
+    the caller wraps those into a stable, greppable argument error.
+    """
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def write_ndjson(path: str | os.PathLike[str], objects: Iterable[Any]) -> int:
     """Write ``objects`` as canonical NDJSON, one object per line.
 

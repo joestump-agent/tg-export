@@ -4,9 +4,9 @@ M2 landed the auth surface: ``login`` (one-time interactive), ``doctor`` (headle
 authorization check), credential resolution, and the sentinel exit-code model. M3
 makes ``export`` (the dialog walk + NDJSON/manifest writer, delegated to
 :mod:`tg_export.export`) and ``chats`` (dialog discovery listing) fully functional
-and non-interactive. ``--version`` (M1) is unchanged. ``--since``/``--full`` are
-declared on ``export`` but land in M5; passing them fails fast with a clear message
-rather than silently doing a full re-export.
+and non-interactive. ``--version`` (M1) is unchanged. M5 makes ``--since`` (read the
+prior manifest's per-chat anchors and append only-new messages) and ``--full``
+(ignore anchors, re-export everything) real (SPEC-0001 REQ "Incremental Export").
 
 Every command except ``login`` is non-interactive (SPEC-0001 REQ "CLI Surface").
 Domain failures raise the sentinels in :mod:`tg_export.errors`; :func:`main` maps
@@ -127,20 +127,16 @@ def _cmd_export(args: argparse.Namespace) -> int:
     credential = auth.resolve_credential(args.api_id, args.api_hash)
     if not args.output:
         raise MalformedArgumentError("tg-export: export requires --output <dir>")
-    if args.since or args.full:
-        # Deliberate hard-fail until M5. These stay declared on the surface for a
-        # stable CLI contract, but incremental export is not implemented yet:
-        # accepting them silently would ignore the --since anchor and re-export
-        # everything (a surprising, expensive wrong result), so a loud malformed-arg
-        # exit is preferred over silent wrong behavior.
-        raise MalformedArgumentError(
-            "tg-export: --since/--full (incremental export) are not implemented until M5"
-        )
+    # M5 incremental (SPEC-0001 REQ "Incremental Export"; ADR-0008): --since reads
+    # the prior run's per-chat max_message_id anchors and appends only-new messages;
+    # --full ignores all anchors and re-exports everything (and wins over --since).
     config = export.ExportConfig(
         output=Path(args.output),
         chats=_parse_chats(args.chats),
         no_media=args.no_media,
         max_media_mb=args.max_media_mb,
+        since=Path(args.since) if args.since else None,
+        full=args.full,
     )
     manifest = export.run_export(config, session=args.session, credential=credential)
     total = sum(chat["message_count"] for chat in manifest["chats"])
