@@ -192,6 +192,10 @@ async def _export_chat(
     """
     mapped: list[dict[str, Any]] = []
     ndjson_path = output / "chats" / f"{chat_id}.ndjson"
+    # Deliberate: opening the writer creates chats/<id>.ndjson eagerly, so an
+    # in-scope chat with zero messages leaves a valid 0-byte file plus a manifest
+    # entry (message_count 0). This keeps the manifest index and the on-disk file
+    # set in lockstep and is what --since (M5) reopens to append to.
     # reverse=True => chronological (oldest-first) deterministic order (ADR-0003).
     # M5 will thread min_id here for --since anchoring.
     with jsonio.ndjson_writer(ndjson_path) as write_line:

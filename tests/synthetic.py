@@ -97,9 +97,28 @@ class MessageEntityTextUrl:
         self.url = url
 
 
+class PeerUser:
+    """Telethon Peer wrapping a user id (what a real ``fwd_from.from_id`` carries)."""
+
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+
+
+class PeerChannel:
+    def __init__(self, channel_id: int) -> None:
+        self.channel_id = channel_id
+
+
 class ReactionEmoji:
     def __init__(self, emoticon: str) -> None:
         self.emoticon = emoticon
+
+
+class ReactionCustomEmoji:
+    """A custom (uploaded) reaction — carries a document id, not an emoticon."""
+
+    def __init__(self, document_id: int) -> None:
+        self.document_id = document_id
 
 
 class ReactionCount:
@@ -114,8 +133,9 @@ class MessageReactions:
 
 
 class MessageFwdHeader:
-    def __init__(self, from_name: str, from_id: int | None, date: datetime | None) -> None:
+    def __init__(self, from_name: str, from_id: Any, date: datetime | None) -> None:
         self.from_name = from_name
+        # Real Telethon hands a Peer here (PeerUser/PeerChannel), not a bare int.
         self.from_id = from_id
         self.date = date
 
@@ -273,7 +293,8 @@ CHAT_1001_MESSAGES: list[Msg] = [
         date=_dt(1719794400),
         message="Forwarded forecast: clear skies through the weekend",
         sender=ADA,
-        fwd_from=MessageFwdHeader("Mountain Weather Bot", 700700, _dt(1719788000)),
+        # from_id is a Peer (as real Telethon supplies) -> unwrapped to int 700700.
+        fwd_from=MessageFwdHeader("Mountain Weather Bot", PeerUser(700700), _dt(1719788000)),
     ),
     Msg(
         id=15,
@@ -338,6 +359,8 @@ CHAT_2002_MESSAGES: list[Msg] = [
         message=_MSG30_TEXT,
         sender=ALERTS_CHANNEL,  # channel post -> from.id null
         entities=[_url_entity(_MSG30_TEXT, "https://example.org/alerts/17")],
+        # A custom (uploaded) reaction: no emoticon, only a document id -> str id.
+        reactions=MessageReactions([ReactionCount(ReactionCustomEmoji(5555001), 4)]),
     ),
     Msg(
         id=31,

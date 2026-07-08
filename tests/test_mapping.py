@@ -9,6 +9,8 @@ offset ever crosses the boundary.
 
 from __future__ import annotations
 
+import pytest
+
 import synthetic
 from tg_export import mapping, schemas
 
@@ -87,13 +89,37 @@ def test_reply_and_reactions_present():
     assert obj["reactions"] == [{"emoji": "❤", "count": 2}]
 
 
-def test_forward_present():
+def test_forward_present_and_peer_from_id_unwrapped():
+    # fwd_from.from_id is a Telethon PeerUser in the fixture (as in real life); the
+    # mapper must unwrap it to a bare int, not emit the Peer object.
     obj = _map(1001, 14)
     assert obj["forward"] == {
         "from_name": "Mountain Weather Bot",
         "from_id": 700700,
         "date": 1719788000,
     }
+
+
+def test_as_int_id_unwraps_peer_channel_and_user():
+    assert mapping._as_int_id(synthetic.PeerChannel(2002)) == 2002
+    assert mapping._as_int_id(synthetic.PeerUser(900001)) == 900001
+    assert mapping._as_int_id(700700) == 700700  # bare int passes through
+    assert mapping._as_int_id(None) is None
+
+
+def test_custom_emoji_reaction_serializes_document_id():
+    # A ReactionCustomEmoji has no emoticon; its document id is emitted as a string.
+    obj = _map(2002, 30)
+    assert obj["reactions"] == [{"emoji": "5555001", "count": 4}]
+    schemas.validate("message", obj)
+
+
+def test_missing_date_raises_for_the_reject_gate():
+    # A real message always has a date; a None date is an anomaly the mapper surfaces
+    # loudly (rather than silently emitting 0), for the export reject gate to wrap.
+    bad = synthetic.Msg(id=999, date=None, message="no date", sender=synthetic.ADA)
+    with pytest.raises(ValueError, match="no date"):
+        mapping.map_message(bad, chat_id=1001, self_id=SELF_ID)
 
 
 def test_edit_date_carried():

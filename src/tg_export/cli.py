@@ -128,8 +128,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if not args.output:
         raise MalformedArgumentError("tg-export: export requires --output <dir>")
     if args.since or args.full:
-        # Declared on the surface but implemented in M5; fail loudly rather than
-        # silently ignoring the anchor and re-exporting everything.
+        # Deliberate hard-fail until M5. These stay declared on the surface for a
+        # stable CLI contract, but incremental export is not implemented yet:
+        # accepting them silently would ignore the --since anchor and re-export
+        # everything (a surprising, expensive wrong result), so a loud malformed-arg
+        # exit is preferred over silent wrong behavior.
         raise MalformedArgumentError(
             "tg-export: --since/--full (incremental export) are not implemented until M5"
         )

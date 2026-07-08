@@ -361,10 +361,18 @@ def map_message(msg: Any, *, chat_id: int, self_id: int | None) -> dict[str, Any
     action = getattr(msg, "action", None)
     kind = "service" if action is not None else "message"
 
+    date = _epoch(getattr(msg, "date", None))
+    if date is None:
+        # A real Telegram message always carries a date. A missing one is a genuine
+        # anomaly, so raise loudly (the export reject gate wraps this with chat/msg
+        # context) rather than silently papering it over with 0 — which would also
+        # collapse a legitimate epoch-0 date. Consistent with the reject-gate policy.
+        raise ValueError("message has no date")
+
     obj: dict[str, Any] = {
         "id": int(msg.id),
         "chat_id": int(chat_id),
-        "date": _epoch(getattr(msg, "date", None)) or 0,
+        "date": date,
         "kind": kind,
         "from": _map_from(msg, self_id),
         # Visible text; media captions live in msg.message too, so this flattens both.
