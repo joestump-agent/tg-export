@@ -4,7 +4,7 @@
 
 `tg-export` is a **delegate exporter** for the [msgbrowse](https://github.com/joestump/msgbrowse) ecosystem. msgbrowse has one hard architectural rule: it does not write exporters — extraction is always delegated to a dedicated, provider-targeted tool whose output msgbrowse ingests. Telegram needed a delegate that didn't exist yet (tdl drops non-`--raw` senders and `--raw` leaks MTProto; Telegram Desktop's export is manual). So this tool emits a JSON shape *designed for ingestion* — senders, service events, reactions, media, and true incrementality.
 
-> **Status:** design phase. The architecture and contract are captured as ADRs (`docs/adrs/`) and a specification (`docs/openspec/specs/`); the implementation backlog is tracked as GitHub issues, milestones **M1–M7**. No code has shipped yet.
+> **Status:** early implementation. The architecture and contract are captured as ADRs (`docs/adrs/`) and a specification (`docs/openspec/specs/`); the implementation backlog is tracked as GitHub issues, milestones **M1–M7**. **M1** has landed: the package scaffold, the shipped JSON Schema contract (`schema/`), the canonical deterministic serializer, and the offline synthetic test harness. The Telegram-facing commands (`login`/`export`/`chats`/`doctor`) land in M2–M6.
 
 - **Language:** Python ≥ 3.11 · **Engine:** [Telethon](https://docs.telethon.dev/) (MTProto) · **License:** MIT
 - **Consumed by:** msgbrowse SPEC-0015 (parser built against the same `schema_version`)
@@ -75,6 +75,19 @@ This repository is governed by the [SDD plugin](https://github.com/joestump/clau
 - **ADRs:** `docs/adrs/` — the architectural decisions
 - **Spec:** `docs/openspec/specs/` — the requirements and the JSON contract
 - **Backlog:** GitHub issues on this repo, milestones M1–M7
+
+### Local setup
+
+Python ≥ 3.11. From a fresh virtualenv:
+
+```
+python -m pip install -e '.[dev]'   # runtime + dev deps (ruff, pytest, build)
+ruff check .                        # lint
+python -m pytest -q                 # fully offline, 100% synthetic fixtures
+python -m build                     # sdist + wheel into dist/
+```
+
+The JSON Schema contract lives in `schema/` and ships inside the package (`tg_export/schema/`); load it at runtime with `tg_export.schemas.load_schema("manifest"|"message")`. The test suite validates the committed golden export tree (`tests/fixtures/golden/`) against that schema and asserts byte-identical determinism — no network access, ever.
 
 ## License
 
