@@ -88,3 +88,110 @@ class FakeTelegramClient:
 def fake_client() -> FakeTelegramClient:
     """A fake client preloaded with the synthetic fixtures."""
     return FakeTelegramClient(synthetic.CHATS, synthetic.ACCOUNT)
+
+
+class FakeAuthClient:
+    """Offline stand-in matching ``telethon.TelegramClient``'s auth surface.
+
+    Constructed with Telethon's ``(session, api_id, api_hash, **kwargs)`` signature
+    so it can be monkeypatched in for the real class. Behavior (already authorized?
+    connect failure?) is configured per-test via :func:`telethon_stub`. It records
+    every prompt callback it is handed so hygiene tests can prove the phone/code/
+    2FA values never escape into logs. It never touches the network.
+    """
+
+    #: Class-level knobs set by the ``telethon_stub`` installer before construction.
+    authorized: bool = True
+    connect_error: BaseException | None = None
+    instances: list[FakeAuthClient] = []
+
+    def __init__(self, session: str, api_id: int, api_hash: str, **_: Any) -> None:
+        self.session = session
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self._authorized = type(self).authorized
+        self._connect_error = type(self).connect_error
+        self.connected = False
+        self.started = False
+        type(self).instances.append(self)
+
+    async def connect(self) -> None:
+        if self._connect_error is not None:
+            raise self._connect_error
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.connected = False
+
+    async def is_user_authorized(self) -> bool:
+        return self._authorized
+
+    async def start(
+        self,
+        phone: Any = None,
+        code_callback: Any = None,
+        password: Any = None,
+    ) -> FakeAuthClient:
+        # Mimic Telethon driving the interactive dance by invoking each callback.
+        if callable(phone):
+            phone()
+        if callable(code_callback):
+            code_callback()
+        if callable(password):
+            password()
+        self.started = True
+        self._authorized = True
+        self.connected = True
+        return self
+
+    async def get_me(self) -> dict[str, Any]:
+        return {"id": 424242}
+
+    def takeout(self, **kwargs: Any) -> FakeTakeout:
+        # Mirrors client.takeout(...) returning an async context manager.
+        self.takeout_kwargs = kwargs
+        self.takeout_exc_type: type[BaseException] | None = None
+        self.takeout_finalized_success: bool | None = None
+        return FakeTakeout(self)
+
+
+class FakeTakeout:
+    """Async CM standing in for a Telethon takeout session.
+
+    Records the ``exc_type`` its ``__aexit__`` receives so a test can prove a
+    consumer-side error is forwarded (and thus the takeout is NOT finalized as a
+    success). Never suppresses the exception.
+    """
+
+    def __init__(self, client: FakeAuthClient) -> None:
+        self._client = client
+
+    async def __aenter__(self) -> FakeAuthClient:
+        self._client.takeout_entered = True
+        return self._client
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        self._client.takeout_exc_type = exc_type
+        self._client.takeout_finalized_success = exc_type is None
+        return False
+
+
+@pytest.fixture
+def telethon_stub(monkeypatch: pytest.MonkeyPatch):
+    """Install a configurable offline stand-in for ``telethon.TelegramClient``.
+
+    Returns an installer: ``telethon_stub(authorized=..., connect_error=...)`` that
+    patches ``telethon.TelegramClient`` and returns the stub class (whose
+    ``instances`` list captures every client the code under test built).
+    """
+
+    def install(
+        *, authorized: bool = True, connect_error: BaseException | None = None
+    ) -> type[FakeAuthClient]:
+        FakeAuthClient.authorized = authorized
+        FakeAuthClient.connect_error = connect_error
+        FakeAuthClient.instances = []
+        monkeypatch.setattr("telethon.TelegramClient", FakeAuthClient)
+        return FakeAuthClient
+
+    return install
