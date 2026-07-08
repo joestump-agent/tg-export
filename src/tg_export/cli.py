@@ -1,10 +1,12 @@
 """Command-line entry point for tg-export.
 
-M2 lands the auth surface: ``login`` (one-time interactive), ``doctor`` (headless
-authorization check), credential resolution, and the sentinel exit-code model.
-``export`` and ``chats`` resolve credentials through the same plumbing but their
-full history logic is M3 — they exit non-zero with a clear "not implemented yet"
-message rather than silently claiming success. ``--version`` (M1) is unchanged.
+M2 landed the auth surface: ``login`` (one-time interactive), ``doctor`` (headless
+authorization check), credential resolution, and the sentinel exit-code model. M3
+makes ``export`` (the dialog walk + NDJSON/manifest writer, delegated to
+:mod:`tg_export.export`) and ``chats`` (dialog discovery listing) fully functional
+and non-interactive. ``--version`` (M1) is unchanged. ``--since``/``--full`` are
+declared on ``export`` but land in M5; passing them fails fast with a clear message
+rather than silently doing a full re-export.
 
 Every command except ``login`` is non-interactive (SPEC-0001 REQ "CLI Surface").
 Domain failures raise the sentinels in :mod:`tg_export.errors`; :func:`main` maps
@@ -20,8 +22,9 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from . import __version__, auth
+from . import __version__, auth, export, jsonio
 from .errors import (
     EXIT_MALFORMED_ARG,
     EXIT_OK,
@@ -98,18 +101,68 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parse_chats(raw: str | None) -> frozenset[int] | None:
+    """Parse ``--chats ID,ID,...`` into a frozenset of ids, or ``None`` for default.
+
+    ``None`` selects the default (non-channel) scope; a non-empty set is the
+    explicit opt-in that also admits channels (ADR-0007).
+    """
+    if not raw:
+        return None
+    ids: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.add(int(part))
+        except ValueError:
+            raise MalformedArgumentError(
+                "tg-export: --chats expects comma-separated integer chat ids"
+            ) from None
+    return frozenset(ids) if ids else None
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
-    # Resolve credentials through the M2 plumbing so a misconfigured invocation
-    # fails the same way it will in M3; the history walk itself lands in M3.
-    auth.resolve_credential(args.api_id, args.api_hash)
-    print("tg-export: export is not implemented until M3", file=sys.stderr)
-    return EXIT_RUNTIME
+    credential = auth.resolve_credential(args.api_id, args.api_hash)
+    if not args.output:
+        raise MalformedArgumentError("tg-export: export requires --output <dir>")
+    if args.since or args.full:
+        # Deliberate hard-fail until M5. These stay declared on the surface for a
+        # stable CLI contract, but incremental export is not implemented yet:
+        # accepting them silently would ignore the --since anchor and re-export
+        # everything (a surprising, expensive wrong result), so a loud malformed-arg
+        # exit is preferred over silent wrong behavior.
+        raise MalformedArgumentError(
+            "tg-export: --since/--full (incremental export) are not implemented until M5"
+        )
+    config = export.ExportConfig(
+        output=Path(args.output),
+        chats=_parse_chats(args.chats),
+        no_media=args.no_media,
+        max_media_mb=args.max_media_mb,
+    )
+    manifest = export.run_export(config, session=args.session, credential=credential)
+    total = sum(chat["message_count"] for chat in manifest["chats"])
+    # Summary carries only counts and the output path — never a message body.
+    print(
+        f"tg-export: exported {len(manifest['chats'])} chats, {total} messages "
+        f"to {args.output}",
+        file=sys.stderr,
+    )
+    return EXIT_OK
 
 
 def _cmd_chats(args: argparse.Namespace) -> int:
-    auth.resolve_credential(args.api_id, args.api_hash)
-    print("tg-export: chats is not implemented until M3", file=sys.stderr)
-    return EXIT_RUNTIME
+    credential = auth.resolve_credential(args.api_id, args.api_hash)
+    listing = export.list_chats(session=args.session, credential=credential)
+    if args.json:
+        # Canonical JSON to stdout so callers can parse it deterministically.
+        print(jsonio.dumps(listing))
+    else:
+        for chat in listing:
+            print(f"{chat['id']}\t{chat['type']}\t{chat['title']}")
+    return EXIT_OK
 
 
 _COMMANDS = {

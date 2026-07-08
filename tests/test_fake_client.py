@@ -27,14 +27,15 @@ def test_fake_client_replays_dialogs_and_messages(fake_client):
 
     me, dialog_ids, msgs = asyncio.run(run())
     assert me["id"] == 424242
-    assert dialog_ids == [1001, 5005]
-    assert [m["id"] for m in msgs] == [10, 11, 12, 13, 14, 15, 16, 17]
+    # Telethon-shaped objects now flow through the seam (attribute, not subscript).
+    assert dialog_ids == [1001, 2002, 5005]
+    assert [m.id for m in msgs] == [10, 11, 12, 13, 14, 15, 16, 17]
 
 
 def test_fake_client_min_id_anchor_yields_only_newer(fake_client):
     # Proves the seam M5 uses for incremental --since anchoring works offline.
     async def run():
         async with fake_client as client:
-            return [m["id"] async for m in client.iter_messages(1001, min_id=14)]
+            return [m.id async for m in client.iter_messages(1001, min_id=14)]
 
     assert asyncio.run(run()) == [15, 16, 17]
