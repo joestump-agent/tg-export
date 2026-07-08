@@ -31,6 +31,7 @@ Per-message best-effort *tolerance* (never abort the chat on one bad file) is M6
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -56,6 +57,13 @@ _MIME_EXT: dict[str, str] = {
     "application/zip": ".zip",
 }
 
+#: A derived extension is accepted from an untrusted Telegram filename only if it
+#: matches this short, portable pattern (letters/digits, 1-10 chars, after the dot).
+#: Anything else — backslashes, tabs/control chars, RTL-override unicode, an
+#: over-long suffix — is rejected so neither the on-disk name nor the emitted
+#: ``media.path`` (consumed cross-platform by msgbrowse) can carry hostile bytes.
+_SAFE_EXT_RE = re.compile(r"^[a-z0-9]{1,10}$")
+
 #: Kind -> extension fallback when neither a filename nor a known MIME resolves.
 _KIND_EXT: dict[str, str] = {
     "photo": ".jpg",
@@ -73,13 +81,18 @@ def _extension_for(media_obj: dict[str, Any]) -> str:
     """Pick a deterministic file extension for a mapped media object.
 
     Precedence: the original filename's suffix (cheapest, most faithful) → a known
-    MIME → the kind fallback → ``.bin``.
+    MIME → the kind fallback → ``.bin``. The filename is UNTRUSTED input from
+    Telegram, so its suffix is only accepted when it matches ``_SAFE_EXT_RE``;
+    otherwise it is discarded and derivation falls through to the MIME/kind maps.
     """
     filename = media_obj.get("filename")
     if filename:
-        suffix = PurePosixPath(str(filename)).suffix
-        if suffix:
-            return suffix.lower()
+        # Strip the leading dot and validate against the safe pattern; a hostile or
+        # malformed suffix (backslash, control char, RTL-override, over-long) is
+        # rejected here rather than leaking into media.path.
+        suffix = PurePosixPath(str(filename)).suffix.lower().lstrip(".")
+        if _SAFE_EXT_RE.match(suffix):
+            return f".{suffix}"
     mime = media_obj.get("mime")
     if mime and mime in _MIME_EXT:
         return _MIME_EXT[mime]
@@ -136,7 +149,10 @@ async def _download_one(
     dest = Path(output) / rel
 
     # Idempotent re-download: an existing file at the expected size is authoritative;
-    # set the path and skip the fetch entirely.
+    # set the path and skip the fetch entirely. The check compares against the
+    # DECLARED metadata size (as the spec mandates), which assumes the downloaded
+    # byte count equals the declared size — true for Telegram. If they ever diverge,
+    # the file is re-fetched every run by design (correctness over a stale cache).
     if dest.exists() and dest.stat().st_size == size:
         media_obj["path"] = rel
         log_event("media_cached", chat=chat_id, msg=message_id, path=rel)

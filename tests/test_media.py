@@ -256,7 +256,57 @@ def test_download_error_propagates_with_context(tmp_path: Path):
         ({"kind": "document", "mime": "application/pdf"}, ".pdf"),
         ({"kind": "document", "mime": "application/x-unknown"}, ".bin"),
         ({"kind": "sticker", "mime": "application/x-unknown"}, ".webp"),
+        # A multi-dot filename resolves to the (clean) last suffix.
+        ({"kind": "document", "mime": "application/x-unknown", "filename": "backup.tar.gz"}, ".gz"),
     ],
 )
 def test_extension_derivation(media_obj, expected):
     assert media._extension_for(media_obj) == expected
+
+
+@pytest.mark.parametrize(
+    "hostile_filename",
+    [
+        "x.ba\\ck",  # backslash injection
+        "clip.m\tp4",  # embedded tab / control char
+        "f." + "a" * 300,  # absurdly long suffix
+        "doc.‮mp4",  # RTL-override unicode
+        "weird.a b",  # embedded space
+        "shell.$(rm)",  # shell metacharacters
+    ],
+)
+def test_hostile_filename_extension_is_sanitized(hostile_filename):
+    # An untrusted/malformed filename suffix must NOT leak into the extension; it
+    # degrades to the MIME map (here application/pdf -> .pdf), never a dirty ext.
+    media_obj = {"kind": "document", "mime": "application/pdf", "filename": hostile_filename}
+    ext = media._extension_for(media_obj)
+    assert ext == ".pdf"  # fell through to the clean MIME fallback
+    assert "\\" not in ext
+    assert all(ch.isprintable() and not ch.isspace() for ch in ext.lstrip("."))
+
+
+def test_hostile_filename_keeps_media_path_clean(tmp_path: Path):
+    # End-to-end: a message whose media filename is hostile still yields a portable,
+    # control-char-free media.path.
+    raw = synthetic.Msg(
+        id=70,
+        date=synthetic._dt(1719800000),
+        sender=synthetic.ADA,
+        media=synthetic.MessageMediaDocument(
+            synthetic.Document(
+                # Hostile suffix (backslash + tab) -> rejected -> MIME fallback .pdf.
+                "application/pdf", 4096, [synthetic.DocumentAttributeFilename("evil.p\\d\tf")]
+            )
+        ),
+    )
+    only = mapping.map_media(raw.media)
+    asyncio.run(
+        media.download_media_group(
+            client=FakeTelegramClient(), raw=raw, media_objs=[only],
+            chat_id=9009, message_id=70, output=tmp_path,
+        )
+    )
+    assert only["path"] == "media/9009/70.pdf"  # degraded to the clean MIME fallback
+    assert "\\" not in only["path"]
+    assert all(ch.isprintable() for ch in only["path"])
+    assert (tmp_path / "media" / "9009" / "70.pdf").is_file()
