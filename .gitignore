@@ -1,0 +1,34 @@
+# SDD local tracker-issue cache (replaceable from tracker; may hold sensitive bodies)
+.sdd/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Telethon session files — NEVER commit auth key material
+*.session
+*.session-journal
+
+# Local export output & secrets
+/out/
+*.env
+.env
