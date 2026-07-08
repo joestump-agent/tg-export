@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import inspect
+import logging
 import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -123,13 +124,30 @@ def _default_factory(session: str, api_id: int, api_hash: str) -> Any:
     return telethon.TelegramClient(session, api_id, api_hash)
 
 
+def _resolve_session_path(session: str | os.PathLike[str]) -> Path:
+    """Return the concrete session-file path, appending ``.session`` when absent.
+
+    Telethon's SQLiteSession appends ``.session`` to a name that lacks the
+    extension, so a caller passing ``/app/tg`` would find the real file at
+    ``/app/tg.session``. Normalizing here means the path we hand Telethon, the
+    path we harden, and the path we report are all identical — and login and every
+    headless reuse resolve to the same file. A path that already carries any
+    suffix is passed through unchanged.
+    """
+    path = Path(session)
+    if path.suffix == "":
+        return path.with_name(path.name + ".session")
+    return path
+
+
 def _construct(
     session: str | os.PathLike[str],
     credential: ApiCredential,
     factory: ClientFactory | None,
 ) -> Any:
     build = factory or _default_factory
-    return build(str(session), credential.api_id, credential.api_hash)
+    resolved = _resolve_session_path(session)
+    return build(str(resolved), credential.api_id, credential.api_hash)
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -151,15 +169,20 @@ async def _disconnect(client: Any) -> None:
         return
     try:
         await _maybe_await(disconnect())
-    except Exception:
-        # Best-effort teardown must never mask the original outcome.
-        pass
+    except Exception as exc:
+        # Best-effort teardown must never mask the original outcome, but a
+        # persistent disconnect failure should still be greppable (name only,
+        # never a message body or secret).
+        log_event("disconnect_failed", level=logging.DEBUG, error=type(exc).__name__)
 
 
 async def _is_authorized(client: Any) -> bool:
     try:
         return bool(await _maybe_await(client.is_user_authorized()))
     except UnauthorizedError:
+        # Unreachable with Telethon 1.36 — is_user_authorized() catches RPCError
+        # internally and returns False. Kept as a defensive guard so a future
+        # Telethon that lets the 401 escape still degrades to "not authorized".
         return False
     except _NETWORK_ERRORS as exc:
         raise NetworkError("tg-export: could not reach Telegram") from exc
@@ -168,22 +191,25 @@ async def _is_authorized(client: Any) -> bool:
 def harden_session_file(session: str | os.PathLike[str]) -> Path:
     """Ensure the session file exists and is ``0600``; return its resolved path.
 
-    Telethon appends ``.session`` when the name lacks the extension, so the real
-    file may be at ``<path>`` or ``<path>.session``; whichever exists is hardened.
-    When no real DB was written (e.g. under a mocked client) the caller's path is
-    created so the "a session exists at --session" contract holds, then locked to
-    ``0600`` explicitly (independent of the process umask).
+    The path is normalized the same way it is for the client (see
+    :func:`_resolve_session_path`), so the hardened file is exactly the one
+    Telethon wrote and exactly the one headless reuse will reopen. When no real DB
+    was written (e.g. under a mocked client) the resolved path is created so the
+    "a session exists at the resolved --session path" contract holds, then locked
+    to ``0600`` explicitly (independent of the process umask). A trailing
+    ``.session``-suffixed fallback is still checked to stay robust if a caller
+    supplies an unusual non-``.session`` extension that Telethon extends.
     """
-    path = Path(session)
-    candidates = [path, path.with_name(path.name + ".session")]
+    resolved = _resolve_session_path(session)
+    candidates = [resolved, resolved.with_name(resolved.name + ".session")]
     for candidate in candidates:
         if candidate.exists():
             os.chmod(candidate, 0o600)
             return candidate
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(mode=0o600)
-    os.chmod(path, 0o600)
-    return path
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.touch(mode=0o600)
+    os.chmod(resolved, 0o600)
+    return resolved
 
 
 # --- interactive prompts (defaults; injectable) ------------------------------
@@ -306,12 +332,11 @@ async def open_client(
         if not await _is_authorized(client):
             raise NotAuthorizedError("tg-export: session is not authorized")
         if takeout:
-            takeout_cm = client.takeout(finalize=True)
-            takeout_client = await _maybe_await(takeout_cm.__aenter__())
-            try:
+            # Drive the takeout via ``async with`` so a consumer-side exception is
+            # forwarded to __aexit__ with real exc_info — the takeout is NOT
+            # finalized as success, letting M3's killed run resume cleanly.
+            async with client.takeout(finalize=True) as takeout_client:
                 yield takeout_client
-            finally:
-                await _maybe_await(takeout_cm.__aexit__(None, None, None))
         else:
             yield client
     finally:

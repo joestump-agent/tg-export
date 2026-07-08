@@ -62,12 +62,6 @@ class NetworkError(TgExportError):
     exit_code = EXIT_NETWORK
 
 
-class RuntimeFailure(TgExportError):
-    """A generic, otherwise-unclassified runtime failure."""
-
-    exit_code = EXIT_RUNTIME
-
-
 def exit_code_for(exc: BaseException) -> int:
     """Return the CLI exit code for ``exc`` (the single mapping used everywhere)."""
     if isinstance(exc, TgExportError):

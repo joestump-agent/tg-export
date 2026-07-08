@@ -12,6 +12,7 @@ replaces ``telethon.TelegramClient`` so nothing connects.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import stat
@@ -166,6 +167,66 @@ def test_login_writes_0600_session(tmp_path, telethon_stub):
     assert resolved.exists()
     mode = stat.S_IMODE(resolved.stat().st_mode)
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+def test_login_bare_session_name_normalizes_to_dot_session(tmp_path, telethon_stub):
+    # --session /app/tg (no extension) must resolve to /app/tg.session so the file
+    # lands exactly where headless reuse will reopen it (review item 2).
+    stub = telethon_stub(authorized=False)
+    session = tmp_path / "app" / "tg"
+    cred = auth.resolve_credential(FAKE_API_ID, FAKE_API_HASH, env={})
+    resolved = auth.login(
+        session=session,
+        credential=cred,
+        phone_cb=lambda: FAKE_PHONE,
+        code_cb=lambda: FAKE_CODE,
+        password_cb=lambda: FAKE_2FA,
+    )
+    expected = session.with_name("tg.session")
+    assert resolved == expected
+    assert expected.exists()
+    assert not session.exists()  # the literal bare path is not the session file
+    assert stat.S_IMODE(expected.stat().st_mode) == 0o600
+    # The client was constructed against the same normalized path (reuse is stable).
+    assert stub.instances[-1].session == str(expected)
+
+
+def test_open_client_takeout_does_not_finalize_on_consumer_error(tmp_path, telethon_stub):
+    # Review item 1: a consumer-side exception must propagate and reach the
+    # takeout's __aexit__ with real exc_info — NOT be finalized as success — so
+    # M3's killed run can resume cleanly.
+    stub = telethon_stub(authorized=True)
+    cred = auth.resolve_credential(FAKE_API_ID, FAKE_API_HASH, env={})
+
+    async def run() -> None:
+        async with auth.open_client(
+            session=tmp_path / "s.session", credential=cred, takeout=True
+        ) as takeout_client:
+            assert takeout_client is not None
+            raise ValueError("consumer boom")
+
+    with pytest.raises(ValueError, match="consumer boom"):
+        asyncio.run(run())
+
+    client = stub.instances[-1]
+    assert client.takeout_exc_type is ValueError  # exc_info forwarded
+    assert client.takeout_finalized_success is False  # not finalized as success
+
+
+def test_open_client_takeout_finalizes_on_clean_exit(tmp_path, telethon_stub):
+    stub = telethon_stub(authorized=True)
+    cred = auth.resolve_credential(FAKE_API_ID, FAKE_API_HASH, env={})
+
+    async def run() -> None:
+        async with auth.open_client(
+            session=tmp_path / "s.session", credential=cred, takeout=True
+        ) as takeout_client:
+            assert takeout_client is not None
+
+    asyncio.run(run())
+    client = stub.instances[-1]
+    assert client.takeout_exc_type is None
+    assert client.takeout_finalized_success is True
 
 
 def test_login_via_cli_exits_zero(tmp_path, telethon_stub, monkeypatch):

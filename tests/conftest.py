@@ -147,6 +147,34 @@ class FakeAuthClient:
     async def get_me(self) -> dict[str, Any]:
         return {"id": 424242}
 
+    def takeout(self, **kwargs: Any) -> FakeTakeout:
+        # Mirrors client.takeout(...) returning an async context manager.
+        self.takeout_kwargs = kwargs
+        self.takeout_exc_type: type[BaseException] | None = None
+        self.takeout_finalized_success: bool | None = None
+        return FakeTakeout(self)
+
+
+class FakeTakeout:
+    """Async CM standing in for a Telethon takeout session.
+
+    Records the ``exc_type`` its ``__aexit__`` receives so a test can prove a
+    consumer-side error is forwarded (and thus the takeout is NOT finalized as a
+    success). Never suppresses the exception.
+    """
+
+    def __init__(self, client: FakeAuthClient) -> None:
+        self._client = client
+
+    async def __aenter__(self) -> FakeAuthClient:
+        self._client.takeout_entered = True
+        return self._client
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        self._client.takeout_exc_type = exc_type
+        self._client.takeout_finalized_success = exc_type is None
+        return False
+
 
 @pytest.fixture
 def telethon_stub(monkeypatch: pytest.MonkeyPatch):
