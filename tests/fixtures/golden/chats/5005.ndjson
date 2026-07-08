@@ -1,0 +1,2 @@
+{"chat_id":5005,"date":1719810000,"from":{"id":424242,"is_self":true,"name":"Trail Mix","username":"trailmix"},"id":20,"kind":"message","text":"Remember to charge the GPS the night before."}
+{"action":{"message_id":20,"type":"pin_message"},"chat_id":5005,"date":1719810600,"from":{"id":424242,"is_self":true,"name":"Trail Mix","username":"trailmix"},"id":21,"kind":"service","text":""}
