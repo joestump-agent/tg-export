@@ -2,10 +2,11 @@
 
 The whole suite runs fully offline (SPEC-0001 REQ "Testing"): the ``no_network``
 autouse fixture makes any attempt to open a socket connection a hard failure, so a
-stray real network call cannot pass silently. ``FakeTelegramClient`` is the seam
-M3 builds the real Telethon->contract mapping against — it mimics the async
+stray real network call cannot pass silently. ``FakeTelegramClient`` (defined in
+:mod:`synthetic`, next to the fixtures it replays) is the seam the real
+Telethon->contract mapping and export walk run against — it mimics the async
 surface tg-export uses (``iter_dialogs``/``iter_messages``/``get_me``) without a
-network, replaying the synthetic fixtures.
+network.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any
 import pytest
 
 import synthetic
+from synthetic import FakeTelegramClient
 
 # Governing: SPEC-0001 REQ "Testing" (offline, mocked Telethon, synthetic fixtures)
 
@@ -41,53 +43,10 @@ def golden_dir() -> Path:
     return Path(__file__).parent / "fixtures" / "golden"
 
 
-class FakeDialog:
-    """Minimal stand-in for a Telethon dialog."""
-
-    def __init__(self, chat_id: int, meta: dict[str, Any]) -> None:
-        self.id = chat_id
-        self.name = meta["title"]
-        self.title = meta["title"]
-        self._type = meta["type"]
-        self._messages = meta["messages"]
-
-
-class FakeTelegramClient:
-    """Offline fake of the async Telethon client surface tg-export consumes.
-
-    M1 only asserts this never touches the network and can replay the fixtures;
-    M3 wires the real mapping against this same seam.
-    """
-
-    def __init__(self, chats: dict[int, dict[str, Any]], account: dict[str, Any]) -> None:
-        self._chats = chats
-        self._account = account
-        self.connected = False
-
-    async def __aenter__(self) -> FakeTelegramClient:
-        self.connected = True
-        return self
-
-    async def __aexit__(self, *exc: Any) -> None:
-        self.connected = False
-
-    async def get_me(self) -> dict[str, Any]:
-        return dict(self._account)
-
-    async def iter_dialogs(self):
-        for chat_id, meta in self._chats.items():
-            yield FakeDialog(chat_id, meta)
-
-    async def iter_messages(self, chat_id: int, *, min_id: int = 0, **_: Any):
-        for message in self._chats[chat_id]["messages"]:
-            if message["id"] > min_id:
-                yield message
-
-
 @pytest.fixture
 def fake_client() -> FakeTelegramClient:
     """A fake client preloaded with the synthetic fixtures."""
-    return FakeTelegramClient(synthetic.CHATS, synthetic.ACCOUNT)
+    return FakeTelegramClient(synthetic.RAW_CHATS, synthetic.ACCOUNT)
 
 
 class FakeAuthClient:
