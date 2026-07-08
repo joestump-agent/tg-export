@@ -77,6 +77,22 @@ def test_export_chats_flag_parsed_into_filter(tmp_path, monkeypatch, capsys):
     assert captured[0].chats == frozenset({2002, 1001})
 
 
+def test_export_json_logs_flag_emits_json_lines(tmp_path, monkeypatch, capsys):
+    # M6: --json-logs switches the structured progress output to one JSON object per
+    # line (machine-ingestible) and never leaks a message body.
+    _patch_run_export(monkeypatch)
+    code = cli.main(_export_argv(tmp_path / "s.session", tmp_path / "out", "--json-logs"))
+    assert code == EXIT_OK
+    err = capsys.readouterr().err
+    json_lines = [
+        ln for ln in err.splitlines() if ln.startswith("{") and ln.rstrip().endswith("}")
+    ]
+    assert json_lines  # progress was emitted as JSON
+    parsed = [json.loads(ln) for ln in json_lines]
+    assert any(obj["event"] == "export_complete" for obj in parsed)
+    assert "Anyone up for the ridge loop" not in err
+
+
 def test_export_no_media_flag_flows(tmp_path, monkeypatch):
     captured: list[export.ExportConfig] = []
     _patch_run_export(monkeypatch, capture=captured)

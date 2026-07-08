@@ -3,8 +3,9 @@
 Drives :func:`tg_export.export.export_with_client` against the fake client and
 asserts the SPEC-0001 tree contract: every emitted object validates against the
 shipped schema, the default scope excludes channels while ``--chats`` opts one in
-(ADR-0007), re-export is byte-identical (ADR-0004), the schema reject gate fails
-loudly, and progress logs never carry a message body.
+(ADR-0007), re-export is byte-identical (ADR-0004), a message that fails to map or
+validate is SKIPPED and logged (best-effort tolerance, M6 — no longer a fatal
+reject gate), and progress logs never carry a message body.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ import pytest
 import synthetic
 from synthetic import FakeTelegramClient
 from tg_export import export, mapping, schemas
-from tg_export.errors import ExportError
 
 
 def _run(config: export.ExportConfig) -> dict:
@@ -101,33 +101,58 @@ def test_reexport_is_byte_identical(tmp_path: Path):
         assert (one / rel).read_bytes() == (two / rel).read_bytes()
 
 
-# --- reject gate: SPEC-0001 "JSON Output Contract" / "Error Handling" ---------
+# --- best-effort tolerance: SPEC-0001 "Reliability and Rate Limits" (M6) ------
+# M6 deliberately replaces M3's per-message reject gate: a message that fails to
+# map or validate is SKIPPED and logged, one bad message never aborts the chat.
 
 
-def test_invalid_mapped_object_fails_loudly_with_context(tmp_path: Path, monkeypatch):
-    # An object that fails the shipped schema must abort the run with layer-boundary
-    # context — never be silently written.
-    def _bad(msg, *, chat_id, self_id):
-        return {"id": msg.id, "chat_id": chat_id, "kind": "bogus"}  # invalid kind + missing fields
+def test_invalid_mapped_object_is_skipped_not_fatal(tmp_path: Path, monkeypatch, caplog):
+    # An object that fails the shipped schema is skipped (logged), and the rest of
+    # the chat still exports — the run completes.
+    real = mapping.map_message
 
-    monkeypatch.setattr(mapping, "map_message", _bad)
-    with pytest.raises(ExportError) as exc:
-        _run(export.ExportConfig(output=tmp_path))
-    message = str(exc.value)
-    assert "chat 1001:" in message
-    assert "message 10:" in message
-    assert "validation failed" in message
+    def _bad_for_10(msg, *, chat_id, self_id):
+        if getattr(msg, "id", None) == 10:
+            return {"id": msg.id, "chat_id": chat_id, "kind": "bogus"}  # invalid
+        return real(msg, chat_id=chat_id, self_id=self_id)
+
+    monkeypatch.setattr(mapping, "map_message", _bad_for_10)
+    caplog.set_level(logging.WARNING, logger="tg_export")
+    manifest = _run(export.ExportConfig(output=tmp_path, generated_at=synthetic.GENERATED_AT))
+
+    # Message 10 was skipped; the other chat-1001 messages still exported.
+    objs = _read_ndjson(tmp_path / "chats" / "1001.ndjson")
+    ids = [o["id"] for o in objs]
+    assert 10 not in ids
+    assert 11 in ids  # the rest of the chat survived
+    for obj in objs:
+        schemas.validate("message", obj)
+    # The run completed and wrote a valid manifest.
+    schemas.validate("manifest", manifest)
+    # The skip is logged with chat/message context — never silently swallowed.
+    assert "event=message_skipped" in caplog.text
+    assert "chat=1001" in caplog.text
+    assert "msg=10" in caplog.text
 
 
-def test_mapping_exception_wrapped_with_context(tmp_path: Path, monkeypatch):
-    def _boom(msg, *, chat_id, self_id):
-        raise RuntimeError("kaboom")
+def test_mapping_exception_is_skipped_with_context(tmp_path: Path, monkeypatch, caplog):
+    real = mapping.map_message
 
-    monkeypatch.setattr(mapping, "map_message", _boom)
-    with pytest.raises(ExportError) as exc:
-        _run(export.ExportConfig(output=tmp_path))
-    assert "mapping failed: kaboom" in str(exc.value)
-    assert "chat 1001: message 10:" in str(exc.value)
+    def _boom_for_10(msg, *, chat_id, self_id):
+        if getattr(msg, "id", None) == 10:
+            raise RuntimeError("kaboom")
+        return real(msg, chat_id=chat_id, self_id=self_id)
+
+    monkeypatch.setattr(mapping, "map_message", _boom_for_10)
+    caplog.set_level(logging.WARNING, logger="tg_export")
+    manifest = _run(export.ExportConfig(output=tmp_path, generated_at=synthetic.GENERATED_AT))
+
+    ids = [o["id"] for o in _read_ndjson(tmp_path / "chats" / "1001.ndjson")]
+    assert 10 not in ids and 11 in ids
+    schemas.validate("manifest", manifest)
+    assert "event=message_skipped" in caplog.text
+    assert "chat=1001" in caplog.text and "msg=10" in caplog.text
+    assert "cause=RuntimeError" in caplog.text
 
 
 # --- logging hygiene: SPEC-0001 "Error Handling Standards" --------------------

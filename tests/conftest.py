@@ -19,8 +19,21 @@ import pytest
 
 import synthetic
 from synthetic import FakeTelegramClient
+from tg_export import logging as tg_logging
 
 # Governing: SPEC-0001 REQ "Testing" (offline, mocked Telethon, synthetic fixtures)
+
+
+@pytest.fixture(autouse=True)
+def reset_logging() -> Any:
+    """Reset tg-export logging state after each test.
+
+    The ``--json-logs`` toggle and the installed stderr handler are process-global
+    (M6); resetting between tests keeps the shared-process suite isolated so one
+    test's ``configure(json_logs=True)`` cannot leak into another's assertions.
+    """
+    yield
+    tg_logging.reset()
 
 
 @pytest.fixture(autouse=True)
