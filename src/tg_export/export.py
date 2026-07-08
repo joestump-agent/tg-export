@@ -19,8 +19,9 @@ Errors are wrapped with layer-boundary context (``chat <id>: message <id>:
 body (SPEC-0001 REQ "Error Handling Standards", "Security and Secret Hygiene").
 
 Seams left clean for later milestones:
-* **M4 media download** lives behind :func:`tg_export.mapping.map_media`; the walk
-  here already emits the ``media`` metadata block with ``path: null``.
+* **M4 media download** (:mod:`tg_export.media`) interleaves with the walk: each
+  message's media is downloaded and its ``media.path`` set in place before the
+  NDJSON line is written.
 * **M5 incremental** (``--since``/``--full``) will pass ``min_id`` into
   ``iter_messages`` and open the writer in append mode; the ``ExportConfig`` fields
   are present but inert in M3.
@@ -39,7 +40,7 @@ from typing import Any
 
 from jsonschema import ValidationError
 
-from . import __version__, auth, jsonio, mapping, schemas
+from . import __version__, auth, jsonio, mapping, media, schemas
 from .errors import ExportError
 from .logging import log_event, phone_last4
 
@@ -183,6 +184,7 @@ async def _export_chat(
     chat_type: str,
     self_id: int | None,
     output: Path,
+    config: ExportConfig,
 ) -> list[dict[str, Any]]:
     """Iterate, map, validate, and append one chat's messages; return the mapped list.
 
@@ -209,6 +211,12 @@ async def _export_chat(
                     chat=chat_id,
                     msg=raw_id,
                 ) from exc
+            # M4 media seam: download (or skip-stub) the message's media and set
+            # media.path IN PLACE before validation/write, so the emitted line — and
+            # thus the golden — captures the relative path (ADR-0003).
+            await media.download_message_media(
+                client, raw, obj, chat_id=chat_id, output=output, config=config
+            )
             try:
                 schemas.validate("message", obj)
             except ValidationError as exc:
@@ -243,7 +251,12 @@ async def export_with_client(client: Any, config: ExportConfig) -> dict[str, Any
             log_event("chat_skipped", chat=chat_id, type=chat_type)
             continue
         messages = await _export_chat(
-            client, chat_id=chat_id, chat_type=chat_type, self_id=self_id, output=output
+            client,
+            chat_id=chat_id,
+            chat_type=chat_type,
+            self_id=self_id,
+            output=output,
+            config=config,
         )
         chat_entries.append(
             chat_manifest_entry(

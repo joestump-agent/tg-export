@@ -278,7 +278,9 @@ CHAT_1001_MESSAGES: list[Msg] = [
                 ReactionCount(ReactionEmoji("\U0001f525"), 1),
             ]
         ),
-        media=MessageMediaPhoto(Photo([PhotoSize(1280, 960, 184320)])),
+        # Size kept small so the committed golden's downloaded blob stays tiny; the
+        # oversize (--max-media-mb) path is exercised with its own fixture in tests.
+        media=MessageMediaPhoto(Photo([PhotoSize(1280, 960, 3072)])),
     ),
     Msg(
         id=13,
@@ -304,7 +306,7 @@ CHAT_1001_MESSAGES: list[Msg] = [
         media=MessageMediaDocument(
             Document(
                 "video/mp4",
-                73400320,
+                4096,
                 [DocumentAttributeVideo(1920, 1080, 42.5), DocumentAttributeFilename("clip.mp4")],
             )
         ),
@@ -323,7 +325,7 @@ CHAT_1001_MESSAGES: list[Msg] = [
         message="Updated packing list attached",
         sender=ADA,
         media=MessageMediaDocument(
-            Document("application/pdf", 20480, [DocumentAttributeFilename("packing.pdf")])
+            Document("application/pdf", 4096, [DocumentAttributeFilename("packing.pdf")])
         ),
     ),
 ]
@@ -410,6 +412,18 @@ RAW_CHATS: dict[int, dict[str, Any]] = {
 
 # --- the offline Telethon fake -----------------------------------------------
 
+#: A fixed, inspectable fill pattern. Deterministic synthetic media bytes keep the
+#: committed golden media blobs byte-stable across runs (ADR-0004).
+_MEDIA_FILL = b"tg-export synthetic media payload\n"
+
+
+def _synthetic_media_bytes(size: int) -> bytes:
+    """Deterministic bytes of exactly ``size`` length (what the fake "downloads")."""
+    if size <= 0:
+        return b""
+    reps = size // len(_MEDIA_FILL) + 1
+    return (_MEDIA_FILL * reps)[:size]
+
 
 class FakeEntity:
     """The ``dialog.entity`` a Telethon dialog exposes (User or Channel-shaped)."""
@@ -452,6 +466,9 @@ class FakeTelegramClient:
         self._chats = chats if chats is not None else RAW_CHATS
         self._account = account if account is not None else ACCOUNT
         self.connected = False
+        #: Count of real download_media invocations, so idempotency (existing file
+        #: not re-fetched) can be asserted by call count.
+        self.download_calls = 0
 
     async def __aenter__(self) -> FakeTelegramClient:
         self.connected = True
@@ -471,6 +488,23 @@ class FakeTelegramClient:
         for message in self._chats[chat_id]["messages"]:
             if message.id > min_id:
                 yield message
+
+    async def download_media(self, message: Any, file: str | None = None) -> str | None:
+        """Offline stand-in for Telethon's ``download_media``.
+
+        Writes a deterministic file of exactly the media's declared ``size`` bytes to
+        ``file`` (so the idempotent exact-size check is faithful), records the call,
+        and never touches the network.
+        """
+        self.download_calls += 1
+        if file is None:
+            return None
+        meta = mapping.map_media(getattr(message, "media", None))
+        size = int(meta["size"]) if meta is not None else 0
+        target = Path(file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_synthetic_media_bytes(size))
+        return str(target)
 
 
 # --- mapped-output helpers (single source of truth for goldens) --------------

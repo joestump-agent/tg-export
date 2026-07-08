@@ -145,7 +145,7 @@ def test_photo_media_metadata_path_null():
     assert obj["media"] == {
         "kind": "photo",
         "mime": "image/jpeg",
-        "size": 184320,
+        "size": 3072,
         "path": None,
         "width": 1280,
         "height": 960,
