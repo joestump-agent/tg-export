@@ -105,10 +105,65 @@ def test_export_requires_output(tmp_path, capsys):
     assert "tg-export:" in capsys.readouterr().err
 
 
-def test_export_since_and_full_rejected_until_m5(tmp_path, capsys):
+def test_export_full_flag_flows_into_config(tmp_path, monkeypatch):
+    # M5: --full is now real and flows through as an ignore-anchors run.
+    captured: list[export.ExportConfig] = []
+    _patch_run_export(monkeypatch, capture=captured)
     code = cli.main(_export_argv(tmp_path / "s.session", tmp_path / "out", "--full"))
+    assert code == EXIT_OK
+    assert captured[0].full is True
+    assert captured[0].since is None
+
+
+def test_export_since_flag_flows_into_config(tmp_path, monkeypatch):
+    # M5: --since reads a real prior manifest; run once to produce it, then resume.
+    captured: list[export.ExportConfig] = []
+    _patch_run_export(monkeypatch, capture=captured)
+    tree = tmp_path / "tree"
+    assert cli.main(_export_argv(tmp_path / "s.session", tree)) == EXIT_OK
+    code = cli.main(_export_argv(tmp_path / "s.session", tree, "--since", str(tree)))
+    assert code == EXIT_OK
+    assert captured[1].since == tree
+    assert captured[1].full is False
+
+
+def test_export_since_defaults_output_to_since_tree(tmp_path, monkeypatch):
+    # ADR-0008 one-evolving-tree: omitting --output on a --since run appends into
+    # the since tree rather than requiring the caller to repeat the path.
+    captured: list[export.ExportConfig] = []
+    _patch_run_export(monkeypatch, capture=captured)
+    tree = tmp_path / "tree"
+    assert cli.main(_export_argv(tmp_path / "s.session", tree)) == EXIT_OK
+    code = cli.main(
+        [
+            "export",
+            "--session",
+            str(tmp_path / "s.session"),
+            "--since",
+            str(tree),
+            "--api-id",
+            FAKE_API_ID,
+            "--api-hash",
+            FAKE_API_HASH,
+        ]
+    )
+    assert code == EXIT_OK
+    assert captured[1].output == tree
+    assert captured[1].since == tree
+
+
+def test_export_since_with_different_output_is_malformed(tmp_path, capsys):
+    # Appending into a tree other than the --since tree would drop prior lines and
+    # silently produce an incomplete archive — refuse it with the arg exit code.
+    code = cli.main(
+        _export_argv(
+            tmp_path / "s.session", tmp_path / "other", "--since", str(tmp_path / "prev")
+        )
+    )
     assert code == EXIT_MALFORMED_ARG
-    assert "M5" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "--since" in err
+    assert "same tree" in err
 
 
 def test_export_bad_chats_filter_is_malformed(tmp_path, capsys):

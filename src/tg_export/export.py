@@ -18,13 +18,15 @@ Errors are wrapped with layer-boundary context (``chat <id>: message <id>:
 :func:`log_event` records that carry only counts, ids, and types — never a message
 body (SPEC-0001 REQ "Error Handling Standards", "Security and Secret Hygiene").
 
-Seams left clean for later milestones:
+Milestones now live:
 * **M4 media download** (:mod:`tg_export.media`) interleaves with the walk: each
   message's media is downloaded and its ``media.path`` set in place before the
   NDJSON line is written.
-* **M5 incremental** (``--since``/``--full``) will pass ``min_id`` into
-  ``iter_messages`` and open the writer in append mode; the ``ExportConfig`` fields
-  are present but inert in M3.
+* **M5 incremental** (``--since``/``--full``): a ``--since`` run reads the prior
+  manifest's per-chat ``max_message_id`` anchors, threads each as
+  ``iter_messages(min_id=...)``, and appends only-new messages in place; ``--full``
+  ignores anchors and re-exports everything (SPEC-0001 REQ "Incremental Export";
+  ADR-0008).
 
 # Governing: SPEC-0001 REQ "CLI Surface", "JSON Output Contract", "Error Handling
 #            Standards"; ADR-0002, ADR-0003, ADR-0007
@@ -33,6 +35,7 @@ Seams left clean for later milestones:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,7 +44,7 @@ from typing import Any
 from jsonschema import ValidationError
 
 from . import __version__, auth, jsonio, mapping, media, schemas
-from .errors import ExportError
+from .errors import ExportError, MalformedArgumentError
 from .logging import log_event, phone_last4
 
 # Governing: ADR-0007 — the default sweep excludes channels.
@@ -174,6 +177,75 @@ def build_manifest(
     }
 
 
+# --- incremental (--since / --full) anchors ----------------------------------
+# Governing: SPEC-0001 REQ "Incremental Export"; ADR-0008 (append-in-place)
+
+
+def _resolve_anchors(config: ExportConfig) -> dict[int, int]:
+    """Return the per-chat ``max_message_id`` anchors that govern this run.
+
+    ``--full`` (or a config with no ``--since``) yields ``{}`` — no anchors, so
+    every chat is re-exported from scratch (the M3 truncate behavior). Otherwise the
+    prior directory's manifest is read and each chat's recorded ``max_message_id`` is
+    returned; a chat present here is resumed via ``min_id`` and appended in place,
+    while a chat absent from it (a new chat) exports in full (ADR-0008). ``--full``
+    wins over ``--since`` when both are given.
+    """
+    if config.full or config.since is None:
+        return {}
+    return _prior_anchors(Path(config.since))
+
+
+def _prior_anchors(since_dir: Path) -> dict[int, int]:
+    """Read ``<since_dir>/manifest.json`` and map ``chat id -> max_message_id``."""
+    manifest_path = since_dir / "manifest.json"
+    try:
+        manifest = jsonio.read_manifest(manifest_path)
+    except (OSError, ValueError) as exc:
+        # A caller-supplied --since dir without a readable manifest is a usage
+        # mistake, surfaced as the stable malformed-argument exit code.
+        raise MalformedArgumentError(
+            f"tg-export: --since {since_dir}: cannot read manifest.json: {exc}"
+        ) from exc
+    try:
+        # A prior manifest that parses as JSON but is structurally wrong (not the
+        # expected shape, or a chat entry lacking max_message_id) is still a usage
+        # mistake, not a generic runtime crash — keep it on the greppable arg code.
+        return {int(chat["id"]): int(chat["max_message_id"]) for chat in manifest.get("chats", [])}
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise MalformedArgumentError(
+            f"tg-export: --since {since_dir}: manifest chat entry missing max_message_id"
+        ) from exc
+
+
+def _read_chat_messages(output: Path, chat_id: int) -> list[dict[str, Any]]:
+    """Read a chat's on-disk NDJSON back into objects (for a complete manifest).
+
+    On an append-in-place ``--since`` run the fresh manifest must count the WHOLE
+    file (prior lines + newly appended lines), so the manifest entry is built from
+    what is on disk, not just this run's new messages.
+    """
+    path = output / "chats" / f"{chat_id}.ndjson"
+    if not path.exists():
+        return []
+    objects: list[dict[str, Any]] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line:
+            continue
+        try:
+            objects.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            # A pre-existing half-written/corrupt prior line (e.g. after a SIGKILL
+            # mid-write) must surface with chat/line context rather than a raw decode
+            # error. M6 will upgrade this to best-effort skip-and-continue; for now it
+            # fails loudly but greppably (SPEC-0001 REQ "Error Handling Standards").
+            raise ExportError(
+                f"chat {chat_id}: prior NDJSON line {lineno} is malformed: {exc}",
+                chat=chat_id,
+            ) from exc
+    return objects
+
+
 # --- the walk ----------------------------------------------------------------
 
 
@@ -185,8 +257,16 @@ async def _export_chat(
     self_id: int | None,
     output: Path,
     config: ExportConfig,
+    min_id: int = 0,
+    append: bool = False,
 ) -> list[dict[str, Any]]:
     """Iterate, map, validate, and append one chat's messages; return the mapped list.
+
+    ``min_id`` is the incremental lower bound threaded into ``iter_messages`` so a
+    ``--since`` run fetches only messages with id greater than the prior anchor
+    (ADR-0008). ``append`` opens the writer in ``"a"`` mode so those newer messages
+    are appended past the chat's existing lines rather than truncating them; a full
+    or new-chat run leaves ``append=False`` (the M3 truncate behavior).
 
     A message that fails to map or fails schema validation raises
     :class:`ExportError` with ``chat <id>: message <id>: <cause>`` context — the
@@ -199,9 +279,9 @@ async def _export_chat(
     # entry (message_count 0). This keeps the manifest index and the on-disk file
     # set in lockstep and is what --since (M5) reopens to append to.
     # reverse=True => chronological (oldest-first) deterministic order (ADR-0003).
-    # M5 will thread min_id here for --since anchoring.
-    with jsonio.ndjson_writer(ndjson_path) as write_line:
-        async for raw in client.iter_messages(chat_id, reverse=True):
+    # min_id anchors the --since incremental lower bound (M5, ADR-0008).
+    with jsonio.ndjson_writer(ndjson_path, mode="a" if append else "w") as write_line:
+        async for raw in client.iter_messages(chat_id, reverse=True, min_id=min_id):
             raw_id = getattr(raw, "id", "?")
             try:
                 obj = mapping.map_message(raw, chat_id=chat_id, self_id=self_id)
@@ -243,6 +323,10 @@ async def export_with_client(client: Any, config: ExportConfig) -> dict[str, Any
     output = Path(config.output)
     generated_at = config.generated_at if config.generated_at is not None else int(time.time())
 
+    # Governing: SPEC-0001 REQ "Incremental Export"; ADR-0008. Anchors are empty for
+    # a full/default run; on --since they carry each prior chat's max_message_id.
+    anchors = _resolve_anchors(config)
+
     chat_entries: list[dict[str, Any]] = []
     async for dialog in client.iter_dialogs():
         chat_id = int(dialog.id)
@@ -250,20 +334,37 @@ async def export_with_client(client: Any, config: ExportConfig) -> dict[str, Any
         if not in_scope(chat_id, chat_type, config.chats):
             log_event("chat_skipped", chat=chat_id, type=chat_type)
             continue
-        messages = await _export_chat(
+        # A chat present in the prior manifest resumes from its anchor and appends
+        # in place; a chat absent from it (new chat) or a --full run exports fresh.
+        anchor = anchors.get(chat_id)
+        append = anchor is not None
+        min_id = anchor if append else 0
+        new_messages = await _export_chat(
             client,
             chat_id=chat_id,
             chat_type=chat_type,
             self_id=self_id,
             output=output,
             config=config,
+            min_id=min_id,
+            append=append,
         )
+        # The fresh manifest must reflect the COMPLETE file (prior + appended), so
+        # an append run rereads the on-disk NDJSON; a fresh run's new_messages ARE
+        # the whole file.
+        file_messages = _read_chat_messages(output, chat_id) if append else new_messages
         chat_entries.append(
             chat_manifest_entry(
-                chat_id, chat_type, _dialog_title(dialog), _dialog_username(dialog), messages
+                chat_id, chat_type, _dialog_title(dialog), _dialog_username(dialog), file_messages
             )
         )
-        log_event("chat_exported", chat=chat_id, type=chat_type, messages=len(messages))
+        log_event(
+            "chat_exported",
+            chat=chat_id,
+            type=chat_type,
+            messages=len(new_messages),
+            total=len(file_messages),
+        )
 
     manifest = build_manifest(account, chat_entries, generated_at=generated_at)
     # Reject gate: the manifest must validate before it is written.
