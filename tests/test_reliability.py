@@ -28,6 +28,7 @@ from telethon.errors import FloodWaitError
 from synthetic import GENERATED_AT, FakeTelegramClient, Msg, User, _dt
 from tg_export import export, jsonio, mapping, reliability, schemas
 from tg_export import logging as tg_logging
+from tg_export.errors import NetworkError, NotAuthorizedError
 
 SELF_ID = 424242
 ACCOUNT = {"id": SELF_ID, "username": "trailmix", "phone_last4": "6789"}
@@ -187,6 +188,44 @@ def test_bad_chat_is_skipped_not_fatal(tmp_path: Path, caplog):
     assert "event=chat_error_skipped" in caplog.text
     assert "chat=4004" in caplog.text
     assert "cause=RuntimeError" in caplog.text
+
+
+class ChatFatalErrorClient(FakeTelegramClient):
+    """Raises a *genuine* (non-best-effort) error when a specific chat is iterated."""
+
+    def __init__(self, chats, account, *, bad_chat_id: int, error: Exception) -> None:
+        super().__init__(chats, account)
+        self._bad = bad_chat_id
+        self._error = error
+
+    async def iter_messages(self, chat_id: int, *, min_id: int = 0, **kw: Any):
+        if chat_id == self._bad:
+            raise self._error
+        async for message in super().iter_messages(chat_id, min_id=min_id, **kw):
+            yield message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [NotAuthorizedError("tg-export: not authorized"), NetworkError("connection reset")],
+)
+def test_genuine_auth_or_network_error_mid_walk_is_not_swallowed(tmp_path: Path, error):
+    """Best-effort tolerance MUST NOT swallow a real auth/network failure.
+
+    A NotAuthorized/Network error raised while iterating a chat has to propagate out
+    of the walk (surfacing the dedicated exit code), NOT be caught as a best-effort
+    "skipped chat" — otherwise an expired session mid-run would silently exit 0 with a
+    truncated archive. Locks in the re-raise guard in ``export_with_client``
+    (SPEC-0001 REQ "Reliability", "Error Handling Standards").
+    """
+    client = ChatFatalErrorClient(
+        {3003: _chat_meta(3003, [_msg(1), _msg(2)])},
+        ACCOUNT,
+        bad_chat_id=3003,
+        error=error,
+    )
+    with pytest.raises(type(error)):
+        _run(client, export.ExportConfig(output=tmp_path, generated_at=GENERATED_AT))
 
 
 # --- killed-run resume: valid partial tree, --since continues cleanly --------
