@@ -20,12 +20,16 @@ The four knobs the REQ mandates all live here:
   (``media/<chat_id>/...``), never absolute and never run-varying, so re-export is
   byte-stable (ADR-0004).
 
-A download error is NOT silently swallowed: it is wrapped with layer-boundary
-context (``chat <id>: message <id>: media download failed: <cause>``) and raised.
-Per-message best-effort *tolerance* (never abort the chat on one bad file) is M6.
+A flood-wait during a download is survived, never fatal: a
+:class:`telethon.errors.FloodWaitError` is caught, its seconds are slept via
+:func:`tg_export.reliability.sleep_flood`, and the same (idempotent) download is
+retried (SPEC-0001 REQ "Reliability and Rate Limits"; M6). Any OTHER download error
+is wrapped with layer-boundary context (``chat <id>: message <id>: media download
+failed: <cause>``) and raised as :class:`ExportError`; the export walk's per-message
+tolerance (M6) turns that into a logged skip so one bad file never aborts the chat.
 
-# Governing: SPEC-0001 REQ "Media Handling", REQ "Error Handling Standards";
-#            ADR-0003 (media/<chat_id>/<message_id>[_<n>].<ext>), ADR-0004
+# Governing: SPEC-0001 REQ "Media Handling", REQ "Error Handling Standards", REQ
+#            "Reliability and Rate Limits"; ADR-0003, ADR-0004
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from telethon.errors import FloodWaitError
+
+from . import reliability
 from .errors import ExportError
 from .logging import log_event
 
@@ -159,14 +166,21 @@ async def _download_one(
         return
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        await client.download_media(raw, file=str(dest))
-    except Exception as exc:  # noqa: BLE001 - re-raised with boundary context (not M6)
-        raise ExportError(
-            f"chat {chat_id}: message {message_id}: media download failed: {exc}",
-            chat=chat_id,
-            msg=message_id,
-        ) from exc
+    # Flood-wait is survivable (M6): sleep the requested seconds and retry the same
+    # (idempotent) download. Any other error is wrapped with boundary context and
+    # raised — the walk's per-message tolerance downgrades it to a logged skip.
+    while True:
+        try:
+            await client.download_media(raw, file=str(dest))
+            break
+        except FloodWaitError as exc:
+            await reliability.sleep_flood(exc, chat=chat_id, msg=message_id)
+        except Exception as exc:  # noqa: BLE001 - re-raised with boundary context
+            raise ExportError(
+                f"chat {chat_id}: message {message_id}: media download failed: {exc}",
+                chat=chat_id,
+                msg=message_id,
+            ) from exc
     media_obj["path"] = rel
     log_event("media_downloaded", chat=chat_id, msg=message_id, path=rel, size=size)
 

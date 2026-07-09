@@ -5,14 +5,16 @@ Covers SPEC-0001 REQ "Media Handling": a photo downloads to a relative path and
 ``path: null, skipped: true`` skip-stub with no download (scenario 2); an existing
 file at the expected size is not re-fetched (scenario 3); ``--no-media`` downloads
 nothing while keeping the metadata object; a multi-file message gets ``_1``/``_2``
-suffixes; and media paths + bytes are deterministic (ADR-0004). A download error
-propagates with layer-boundary context and is never swallowed.
+suffixes; and media paths + bytes are deterministic (ADR-0004). A download error is
+wrapped with layer-boundary context and, in the export walk, downgraded to a logged
+best-effort skip (M6) — never silently swallowed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,7 @@ import pytest
 
 import synthetic
 from synthetic import FakeTelegramClient
-from tg_export import export, mapping, media
+from tg_export import export, mapping, media, schemas
 from tg_export.errors import ExportError
 
 
@@ -229,20 +231,51 @@ def test_media_paths_and_bytes_are_deterministic(tmp_path: Path):
     ).read_bytes()
 
 
-# --- error handling: wrapped with context, never swallowed -------------------
+# --- error handling: wrapped with context, downgraded to a best-effort skip ---
 
 
-def test_download_error_propagates_with_context(tmp_path: Path):
+def test_download_error_wrapped_with_context_direct_call(tmp_path: Path):
+    # A direct media-download call (outside the walk's tolerance) still wraps the
+    # failure with layer-boundary context and never swallows it.
     class BoomClient(FakeTelegramClient):
         async def download_media(self, message: Any, file: str | None = None):
             raise RuntimeError("connection reset")
 
+    raw = synthetic.CHAT_1001_MESSAGES[2]  # the photo message (id 12)
+    obj = mapping.map_message(raw, chat_id=1001, self_id=synthetic.SELF_ID)
     with pytest.raises(ExportError) as exc:
-        _run(BoomClient(), export.ExportConfig(output=tmp_path))
+        asyncio.run(
+            media.download_message_media(
+                BoomClient(), raw, obj, chat_id=1001, output=tmp_path,
+                config=export.ExportConfig(output=tmp_path),
+            )
+        )
     message = str(exc.value)
     assert "chat 1001:" in message
     assert "message 12:" in message
     assert "media download failed: connection reset" in message
+
+
+def test_download_error_in_walk_is_skipped_not_fatal(tmp_path: Path, caplog):
+    # M6 best-effort tolerance: an undownloadable file is logged and its message
+    # skipped; the rest of the chat still exports and the run completes.
+    class BoomClient(FakeTelegramClient):
+        async def download_media(self, message: Any, file: str | None = None):
+            raise RuntimeError("connection reset")
+
+    caplog.set_level(logging.WARNING, logger="tg_export")
+    manifest = _run(BoomClient(), export.ExportConfig(output=tmp_path))
+
+    objs = _read_ndjson(tmp_path / "chats" / "1001.ndjson")
+    ids = [o["id"] for o in objs]
+    # The three media messages (12, 15, 17) were skipped; text-only ones survived.
+    assert 12 not in ids and 15 not in ids and 17 not in ids
+    assert 10 in ids and 11 in ids
+    for obj in objs:
+        assert obj.get("media") is None  # only non-media messages remain
+    schemas.validate("manifest", manifest)
+    assert "event=message_skipped" in caplog.text
+    assert "chat=1001" in caplog.text and "msg=12" in caplog.text
 
 
 # --- extension derivation unit coverage --------------------------------------
