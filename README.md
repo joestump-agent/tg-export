@@ -4,10 +4,41 @@
 
 `tg-export` is a **delegate exporter** for the [msgbrowse](https://github.com/joestump/msgbrowse) ecosystem. msgbrowse has one hard architectural rule: it does not write exporters — extraction is always delegated to a dedicated, provider-targeted tool whose output msgbrowse ingests. Telegram needed a delegate that didn't exist yet (tdl drops non-`--raw` senders and `--raw` leaks MTProto; Telegram Desktop's export is manual). So this tool emits a JSON shape *designed for ingestion* — senders, service events, reactions, media, and true incrementality.
 
-> **Status:** early implementation. The architecture and contract are captured as ADRs (`docs/adrs/`) and a specification (`docs/openspec/specs/`); the implementation backlog is tracked as GitHub issues, milestones **M1–M7**. **M1** has landed: the package scaffold, the shipped JSON Schema contract (`schema/`), the canonical deterministic serializer, and the offline synthetic test harness. The Telegram-facing commands (`login`/`export`/`chats`/`doctor`) land in M2–M6.
+> **Status:** `v0.1.0` — feature-complete for the M1–M7 backlog. `login`, `export`, `chats`, and `doctor` are all implemented, with the shipped JSON Schema contract (`schema_version: 1`), media download, true incremental refresh, flood-wait resilience, and an offline, 100%-synthetic test suite. See [`CHANGELOG.md`](CHANGELOG.md).
 
 - **Language:** Python ≥ 3.11 · **Engine:** [Telethon](https://docs.telethon.dev/) (MTProto) · **License:** MIT
+- **Version:** `0.1.0` · **Contract:** `schema_version: 1`
 - **Consumed by:** msgbrowse SPEC-0015 (parser built against the same `schema_version`)
+
+## Install
+
+Pure-Python, Python ≥ 3.11. Install the tagged wheel (pinned deps: `telethon==1.36.0`, `platformdirs==4.3.6`, `jsonschema==4.23.0`):
+
+```
+pip install tg_export-0.1.0-py3-none-any.whl     # or: pip install tg-export (from the release)
+tg-export --version                              # -> 0.1.0
+```
+
+The two JSON Schema files ship inside the wheel (`tg_export/schema/manifest.schema.json`, `message.schema.json`) so msgbrowse validates against the exact same contract; load them at runtime with `tg_export.schemas.load_schema("manifest"|"message")`.
+
+## Quickstart
+
+```
+# 1. One-time interactive auth (writes a 0600 session at the path you choose).
+#    Credentials come from flags or the TG_EXPORT_API_ID / TG_EXPORT_API_HASH env
+#    vars — get your own api_id/api_hash at https://my.telegram.org (never embedded).
+export TG_EXPORT_API_ID=... TG_EXPORT_API_HASH=...
+tg-export login  --session ~/.tg/session
+
+# 2. Verify the session is authorized (exit 0 = good; prints the not-authorized token otherwise).
+tg-export doctor --session ~/.tg/session
+
+# 3. Full export (private chats, groups, supergroups; channels excluded unless opted in via --chats).
+tg-export export --session ~/.tg/session --output ~/tg-archive
+
+# 4. Later, refresh incrementally — only new messages are fetched and appended in place.
+tg-export export --session ~/.tg/session --since ~/tg-archive
+```
 
 ## What it does (and doesn't)
 
@@ -45,7 +76,7 @@ NDJSON-per-chat means the exporter appends as it goes (crash-resumable) and msgb
 
 The authoritative field-by-field contract lives in **`docs/openspec/specs/`** and is shipped as machine-checkable JSON Schema files (`manifest.schema.json`, `message.schema.json`) inside the package so both repos validate against one source of truth.
 
-## CLI surface (planned)
+## CLI surface
 
 ```
 tg-export login   --session <path> [--api-id N] [--api-hash H]   # one-time interactive auth
@@ -55,12 +86,13 @@ tg-export export  --session <path> --output <dir>                # the workhorse
                   [--chats ID,ID,...] # restrict to specific chats (opt-in for channels)
                   [--no-media]        # metadata only
                   [--max-media-mb N]  # skip files larger than N MB, leaving a skip-stub
+                  [--json-logs]       # emit one JSON log object per line (machine-ingestible)
 tg-export chats   --session <path> [--json]                      # list dialogs
 tg-export doctor  --session <path>                               # verify session is valid/authorized
-tg-export --version                                              # prints tool_version
+tg-export --version                                              # prints tool_version (0.1.0)
 ```
 
-msgbrowse invokes with explicit argv (never a shell) and controls the `--session` path. Every command is non-interactive except `login`. An unauthorized/expired session prints a stable `tg-export: not authorized` token and exits with a dedicated non-zero code, distinct from network or malformed-arg errors.
+Credentials are read from `--api-id`/`--api-hash` or the `TG_EXPORT_API_ID`/`TG_EXPORT_API_HASH` environment variables; none is embedded in the source. msgbrowse invokes with explicit argv (never a shell) and controls the `--session` path. Every command is non-interactive except `login`. An unauthorized/expired session prints a stable `tg-export: not authorized` token and exits a dedicated non-zero code, distinct from the network-error and malformed-argument codes. On a large first pull, a Telegram flood-wait is slept and resumed — never fatal — and a killed run leaves a valid partial tree that `--since` resumes cleanly.
 
 ## Security invariants
 
