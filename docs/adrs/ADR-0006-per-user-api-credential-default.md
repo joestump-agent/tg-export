@@ -1,10 +1,16 @@
 ---
-status: accepted
+status: superseded
+superseded-by: ADR-0011
 date: 2026-07-08
 decision-makers: Joe Stump
 extends: [ADR-0002]
 related: [ADR-0009]
 ---
+
+> **Superseded by [ADR-0011](ADR-0011-tdl-raw-transform-pivot.md).** The transform
+> holds no Telegram API credential of its own — auth is tdl's job against an installed
+> Telegram Desktop session. The credential-sourcing decision below is retained for
+> history.
 
 # ADR-0006: Default to per-user Telegram API credentials; support both sourcing modes
 

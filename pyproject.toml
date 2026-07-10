@@ -6,12 +6,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tg-export"
-description = "A standalone Telethon CLI that exports a Telegram account's history into an ingestion-ready JSON archive for msgbrowse."
+description = "A standalone CLI that transforms a tdl Telegram export into an ingestion-ready JSON archive for msgbrowse."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Joe Stump" }]
-keywords = ["telegram", "telethon", "export", "msgbrowse", "ndjson"]
+keywords = ["telegram", "tdl", "export", "transform", "msgbrowse", "ndjson"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -23,9 +23,10 @@ classifiers = [
     "Topic :: Utilities",
 ]
 # Runtime deps pinned to exact versions (ADR-0010): pure-Python, small tree.
+# The transform touches no network and manages no session, so the Telethon MTProto
+# client and platformdirs session-path helper of the retired live path are gone
+# (ADR-0011); only the schema validator remains.
 dependencies = [
-    "telethon==1.36.0",
-    "platformdirs==4.3.6",
     "jsonschema==4.23.0",
 ]
 dynamic = ["version"]

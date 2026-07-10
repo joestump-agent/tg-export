@@ -6,6 +6,17 @@ implements: [ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-000
 
 # SPEC-0001: Telegram JSON Export
 
+> **Partially superseded by [ADR-0011](../../adrs/ADR-0011-tdl-raw-transform-pivot.md).**
+> The **JSON output contract** (manifest + NDJSON + schema, `schema_version: 1`) and the
+> **message-mapping fidelity** requirements below remain authoritative and unchanged.
+> The **acquisition half is retired**: tg-export no longer logs in, holds a session, or
+> talks to Telegram — it transforms a [`tdl`](https://github.com/iyear/tdl) `--raw` dump
+> offline. So the requirements covering authentication/session, the interactive
+> `login`/`doctor`/`chats`/`export` CLI surface, incremental `--since`/`--full`, media
+> download, and flood-wait reliability are superseded (they now live upstream in tdl and
+> in msgbrowse's import). The CLI surface is a single `transform --input --output`. A full
+> spec rewrite to the transform model is tracked as follow-up.
+
 ## Overview
 
 `tg-export` extracts a Telegram account's history into a clean, ingestion-ready JSON archive that [msgbrowse](https://github.com/joestump/msgbrowse) parses. It is a standalone delegate exporter (see ADR-0001) built on Telethon/MTProto (ADR-0002). Output is a directory tree of NDJSON-per-chat plus a manifest (ADR-0003), versioned by an integer `schema_version` with JSON Schema shipped in-package (ADR-0004). This spec is the authoritative contract; the msgbrowse-side parser (msgbrowse SPEC-0015, story #209) is built to the same `schema_version` and the two MUST stay in lockstep.

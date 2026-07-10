@@ -3,13 +3,13 @@
 Every name, number, id, and message body here is invented — no real account's
 content appears anywhere (SPEC-0001 REQ "Testing"). The fixtures are Telethon-
 *shaped* objects (they mirror the TL class names the production mapping dispatches
-on), so :func:`tg_export.mapping.map_message` and the whole ``tg_export.export``
-walk run against them exactly as they would against a live client — only offline.
+on), so :func:`tg_export.mapping.map_message` runs against them exactly as it would
+against objects the tdl adapter reshapes from a real dump — only offline.
 
-This module is the single source of truth for the committed golden tree:
-:func:`write_golden` runs the *real* export pipeline over these fakes with a pinned
-``generated_at``, so the golden files and these objects can never silently disagree
-(a drift shows up as a golden-file test failure).
+This module is a single source of truth for golden output:
+:func:`write_golden` maps these fixtures through the production archive helpers with
+a pinned ``generated_at``, so the rendered tree and these objects can never silently
+disagree (a drift shows up as a determinism-test failure).
 
 The valid set exercises every branch of the contract: plain text, resolved links
 (including a channel post whose URL sits right after a non-BMP emoji, to prove the
@@ -22,13 +22,12 @@ JSON Schema.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tg_export import export, mapping
+from tg_export import archive, jsonio, mapping
 
 # Governing: SPEC-0001 REQ "Testing", REQ "JSON Output Contract",
 #            "Message Mapping Fidelity"; ADR-0005, ADR-0007
@@ -410,103 +409,6 @@ RAW_CHATS: dict[int, dict[str, Any]] = {
 }
 
 
-# --- the offline Telethon fake -----------------------------------------------
-
-#: A fixed, inspectable fill pattern. Deterministic synthetic media bytes keep the
-#: committed golden media blobs byte-stable across runs (ADR-0004).
-_MEDIA_FILL = b"tg-export synthetic media payload\n"
-
-
-def _synthetic_media_bytes(size: int) -> bytes:
-    """Deterministic bytes of exactly ``size`` length (what the fake "downloads")."""
-    if size <= 0:
-        return b""
-    reps = size // len(_MEDIA_FILL) + 1
-    return (_MEDIA_FILL * reps)[:size]
-
-
-class FakeEntity:
-    """The ``dialog.entity`` a Telethon dialog exposes (User or Channel-shaped)."""
-
-    def __init__(self, meta: dict[str, Any]) -> None:
-        self.id = meta["entity_id"]
-        self.username = meta["username"]
-        self.title = meta["title"]
-        self.megagroup = meta["megagroup"]
-        self.broadcast = meta["broadcast"]
-
-
-class FakeDialog:
-    """A Telethon-shaped dialog the export walk classifies and titles."""
-
-    def __init__(self, chat_id: int, meta: dict[str, Any]) -> None:
-        self.id = chat_id
-        self.name = meta["title"]
-        self.title = meta["title"]
-        self.entity = FakeEntity(meta)
-        self.is_user = meta["is_user"]
-        self.is_group = meta["type"] == "group"
-        self.is_channel = meta["type"] in ("supergroup", "channel")
-
-
-class FakeTelegramClient:
-    """Offline fake of the async Telethon client surface the export consumes.
-
-    Replays the synthetic fixtures without a network. ``iter_messages`` yields in
-    stored (chronological) order regardless of ``reverse`` — the fixtures are
-    already oldest-first, which is what ``export`` requests via ``reverse=True`` —
-    and honours ``min_id`` so the M5 ``--since`` seam can be exercised offline.
-    """
-
-    def __init__(
-        self,
-        chats: dict[int, dict[str, Any]] | None = None,
-        account: dict[str, Any] | None = None,
-    ) -> None:
-        self._chats = chats if chats is not None else RAW_CHATS
-        self._account = account if account is not None else ACCOUNT
-        self.connected = False
-        #: Count of real download_media invocations, so idempotency (existing file
-        #: not re-fetched) can be asserted by call count.
-        self.download_calls = 0
-
-    async def __aenter__(self) -> FakeTelegramClient:
-        self.connected = True
-        return self
-
-    async def __aexit__(self, *exc: Any) -> None:
-        self.connected = False
-
-    async def get_me(self) -> dict[str, Any]:
-        return dict(self._account)
-
-    async def iter_dialogs(self):
-        for chat_id, meta in self._chats.items():
-            yield FakeDialog(chat_id, meta)
-
-    async def iter_messages(self, chat_id: int, *, min_id: int = 0, **_: Any):
-        for message in self._chats[chat_id]["messages"]:
-            if message.id > min_id:
-                yield message
-
-    async def download_media(self, message: Any, file: str | None = None) -> str | None:
-        """Offline stand-in for Telethon's ``download_media``.
-
-        Writes a deterministic file of exactly the media's declared ``size`` bytes to
-        ``file`` (so the idempotent exact-size check is faithful), records the call,
-        and never touches the network.
-        """
-        self.download_calls += 1
-        if file is None:
-            return None
-        meta = mapping.map_media(getattr(message, "media", None))
-        size = int(meta["size"]) if meta is not None else 0
-        target = Path(file)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(_synthetic_media_bytes(size))
-        return str(target)
-
-
 # --- mapped-output helpers (single source of truth for goldens) --------------
 
 
@@ -518,21 +420,21 @@ def _mapped(chat_id: int) -> list[dict[str, Any]]:
 
 
 def default_scope_ids() -> list[int]:
-    """Chat ids that a default (non-channel) export includes, in walk order."""
+    """Chat ids the committed golden covers (the broadcast channel is left out)."""
     return [cid for cid, meta in RAW_CHATS.items() if meta["type"] != "channel"]
 
 
 def build_manifest() -> dict[str, Any]:
-    """The default-scope manifest, assembled through the production helpers."""
+    """The golden manifest, assembled through the production archive helpers."""
     entries = [
-        export.chat_manifest_entry(
+        archive.chat_manifest_entry(
             cid, RAW_CHATS[cid]["type"], RAW_CHATS[cid]["title"], RAW_CHATS[cid]["username"],
             _mapped(cid),
         )
         for cid in default_scope_ids()
     ]
-    return export.build_manifest(
-        export.account_block(ACCOUNT), entries, generated_at=GENERATED_AT
+    return archive.build_manifest(
+        archive.account_block(ACCOUNT), entries, generated_at=GENERATED_AT
     )
 
 
@@ -545,14 +447,18 @@ def all_valid_messages() -> list[dict[str, Any]]:
 
 
 def write_golden(root: str | os.PathLike[str]) -> None:
-    """Render the synthetic archive into ``root`` via the real export pipeline.
+    """Render the synthetic archive into ``root`` via the production archive helpers.
 
-    Runs a default-scope export (channels excluded) with the pinned
-    ``generated_at`` so the produced tree is the canonical golden.
+    Maps the synthetic Telethon-shaped fixtures directly (no client, no network) and
+    writes the NDJSON + manifest with the pinned ``generated_at`` so the tree is
+    byte-stable (ADR-0004).
     """
-    client = FakeTelegramClient()
-    config = export.ExportConfig(output=Path(root), chats=None, generated_at=GENERATED_AT)
-    asyncio.run(export.export_with_client(client, config))
+    root = Path(root)
+    for chat_id in default_scope_ids():
+        with jsonio.ndjson_writer(root / "chats" / f"{chat_id}.ndjson") as write_line:
+            for obj in _mapped(chat_id):
+                write_line(obj)
+    jsonio.write_manifest(root / "manifest.json", build_manifest())
 
 
 # --- Malformed entries: each MUST be rejected by the shipped JSON Schema ------

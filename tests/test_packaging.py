@@ -15,7 +15,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_version_is_single_source_semver():
-    assert tg_export.__version__ == "0.1.0"
+    assert tg_export.__version__ == "0.2.0"
 
 
 def test_schema_loads_from_installed_package():
@@ -43,8 +43,9 @@ def test_version_flag_prints_semver(capsys):
     assert capsys.readouterr().out.strip() == tg_export.__version__
 
 
-def test_unimplemented_command_exits_nonzero():
-    assert cli.main(["export"]) != 0
+def test_no_subcommand_exits_nonzero():
+    # Invoked with no subcommand, the CLI prints help and returns a nonzero code.
+    assert cli.main([]) != 0
 
 
 def test_no_msgbrowse_coupling():

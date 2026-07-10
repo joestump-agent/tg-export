@@ -1,9 +1,14 @@
 ---
-status: accepted
+status: superseded
+superseded-by: ADR-0011
 date: 2026-07-08
 decision-makers: Joe Stump
 extends: [ADR-0001]
 ---
+
+> **Superseded by [ADR-0011](ADR-0011-tdl-raw-transform-pivot.md).** tg-export no
+> longer runs a live Telethon client; it transforms tdl's `--raw` dump offline. The
+> extraction-engine decision below is retained for history.
 
 # ADR-0002: Use Telethon (MTProto) as the extraction engine
 

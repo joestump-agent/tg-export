@@ -1,8 +1,8 @@
 # tg-export
 
-A small, standalone Telethon CLI that extracts a Telegram account's history into a clean, ingestion-ready JSON archive. It is a **delegate exporter** for the [msgbrowse](https://github.com/joestump/msgbrowse) ecosystem: msgbrowse never touches Telegram's protocol — it bundles this tool and parses its output, exactly as it does for Signal, iMessage, and WhatsApp.
+A small, standalone CLI that transforms a [`tdl`](https://github.com/iyear/tdl) Telegram export (`--raw` MTProto messages) into a clean, ingestion-ready JSON archive. It is the Telegram **fidelity tier** for the [msgbrowse](https://github.com/joestump/msgbrowse) ecosystem: `tdl` does the one-click, Telegram-Desktop-session-imported dump; tg-export reshapes that dump into the curated contract (resolved senders, service events, reactions, replies, forwards, media metadata). It performs no login and touches no network — auth is tdl's job, exactly as msgbrowse defers Signal/iMessage/WhatsApp auth to those source apps (ADR-0011).
 
-The JSON output contract (`schema_version: 1`) is the only coupling, and it flows one way: files out. See `docs/openspec/specs/` for the authoritative contract.
+The JSON output contract (`schema_version: 1`) is the only downstream coupling, and it flows one way: files out. The only upstream coupling is tdl's `--raw` shape, quarantined in `adapter.py`. See `docs/openspec/specs/` for the authoritative contract.
 
 ## Architecture Context
 
