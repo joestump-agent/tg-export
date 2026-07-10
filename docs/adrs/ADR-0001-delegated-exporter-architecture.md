@@ -8,6 +8,14 @@ enables: [ADR-0002, ADR-0003]
 
 # ADR-0001: tg-export is a standalone delegate exporter, not a msgbrowse module
 
+> **Amended by [ADR-0011](ADR-0011-tdl-raw-transform-pivot.md).** This ADR still
+> holds: tg-export is a standalone delegate, not a msgbrowse module. But the delegation
+> changed shape — tg-export now *transforms* [`tdl`](https://github.com/iyear/tdl)'s
+> `--raw` dump rather than driving its own MTProto client, and tdl (not tg-export) owns
+> the login via Telegram Desktop session import. The rejection of tdl below reflects the
+> original (fidelity-only) framing; ADR-0011 explains why tdl + tg-export are
+> complementary tiers, not rivals.
+
 ## Context and Problem Statement
 
 msgbrowse ingests chat history from multiple providers (Signal, iMessage, WhatsApp) and holds one hard architectural rule: it does **not** write exporters. Extraction is always delegated to a dedicated, provider-targeted tool whose on-disk output msgbrowse parses. Telegram had no such delegate — the off-the-shelf options failed on inspection (tdl drops non-`--raw` message senders and `--raw` leaks MTProto wire structure; Telegram Desktop's export is a manual, non-automatable dump). How should Telegram extraction be built so it fits the msgbrowse model without dragging Telegram's protocol into msgbrowse?

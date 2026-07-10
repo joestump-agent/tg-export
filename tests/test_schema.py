@@ -31,18 +31,20 @@ def test_packaged_and_repo_root_schemas_are_byte_identical():
         assert packaged == repo_root, f"{filename} differs between package and repo root"
 
 
-def test_golden_manifest_validates(golden_dir: Path):
-    manifest = json.loads((golden_dir / "manifest.json").read_text(encoding="utf-8"))
+def test_rendered_golden_manifest_validates(tmp_path: Path):
+    synthetic.write_golden(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     schemas.validate("manifest", manifest)
 
 
-def test_golden_messages_validate(golden_dir: Path):
+def test_rendered_golden_messages_validate(tmp_path: Path):
+    synthetic.write_golden(tmp_path)
     count = 0
-    for ndjson in sorted((golden_dir / "chats").glob("*.ndjson")):
+    for ndjson in sorted((tmp_path / "chats").glob("*.ndjson")):
         for line in ndjson.read_text(encoding="utf-8").splitlines():
             schemas.validate("message", json.loads(line))
             count += 1
-    # 8 in chat 1001 + 2 in chat 5005.
+    # 8 in chat 1001 + 2 in chat 5005 (the broadcast channel is out of golden scope).
     assert count == 10
 
 

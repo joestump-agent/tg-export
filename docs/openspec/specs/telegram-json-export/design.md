@@ -1,5 +1,13 @@
 # Design: Telegram JSON Export
 
+> **Partially superseded by [ADR-0011](../../adrs/ADR-0011-tdl-raw-transform-pivot.md).**
+> The output-contract and mapping-fidelity design remain accurate. The acquisition
+> design below — the Telethon/MTProto engine, the session-file security model, per-user
+> credentials, takeout, incremental `iter_messages`, media download, and flood-wait
+> handling — describes the retired live path. tg-export now transforms a `tdl --raw` dump
+> offline (auth + extraction are tdl's job); those sections are retained for history. A
+> full rewrite to the transform design is tracked as follow-up.
+
 ## Context
 
 `tg-export` is the Telegram delegate exporter for the msgbrowse ecosystem (ADR-0001). msgbrowse never links a Telegram/MTProto client; it bundles this tool and parses its file output, exactly as it does for Signal, iMessage, and WhatsApp. This document is the architecture and rationale companion to SPEC-0001, which is the authoritative field-level contract. The consuming side is msgbrowse SPEC-0015 (story #209), built to the same `schema_version`.

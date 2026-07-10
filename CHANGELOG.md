@@ -8,6 +8,37 @@ The JSON output contract is versioned separately by an integer `schema_version`
 (currently `1`); a bump is a coordinated change shipped on both `tg-export` and
 [msgbrowse](https://github.com/joestump/msgbrowse) (ADR-0004).
 
+## [0.2.0] - 2026-07-10
+
+**Architecture pivot ([ADR-0011](docs/adrs/ADR-0011-tdl-raw-transform-pivot.md)):
+tg-export is now a `tdl --raw` → contract transformer, not a live Telethon exporter.**
+The v0.1.0 live surface was built under a misread of the paired msgbrowse decision
+(ADR-0022), which delegates Telegram to `tdl` (one-click Telegram Desktop session
+import). tg-export becomes the fidelity tier that transforms tdl's `--raw` dump.
+
+### Changed
+
+- **One command, `transform --input <tdl-export> --output <dir>`** — offline,
+  deterministic, no login and no network. The fidelity core (`mapping.py`) and the
+  `schema_version: 1` contract are unchanged; only the input source changed.
+
+### Added
+
+- `adapter.py` — the single seam reshaping tdl's gotd-flavoured `--raw` JSON into the
+  Telethon-shaped objects `mapping` consumes (a **skeleton** pending a real dump; open
+  sites marked `TODO(tdl-shape)`, see ADR-0011 verification gates).
+- `transform.py` (pipeline) and `archive.py` (contract writer/manifest, salvaged from
+  the retired live module).
+
+### Removed
+
+- The live Telethon surface: `auth.py` (login/session/credentials), `export.py`'s
+  dialog walk, `reliability.py` (flood-wait), and the Telethon media download. The
+  `telethon` and `platformdirs` runtime dependencies are gone; only `jsonschema`
+  remains.
+- ADR-0002 (engine), ADR-0006 (credentials), and ADR-0009 (session security) are
+  superseded by ADR-0011.
+
 ## [0.1.0] - 2026-07-09
 
 First release. Feature-complete against SPEC-0001 (milestones M1–M7).

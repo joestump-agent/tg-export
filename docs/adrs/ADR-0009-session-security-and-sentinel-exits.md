@@ -1,10 +1,16 @@
 ---
-status: accepted
+status: superseded
+superseded-by: ADR-0011
 date: 2026-07-08
 decision-makers: Joe Stump
 extends: [ADR-0002]
 related: [ADR-0006]
 ---
+
+> **Superseded by [ADR-0011](ADR-0011-tdl-raw-transform-pivot.md).** The transform
+> holds no session file and opens no network, so the session-security model is moot;
+> the exit-code contract shrinks (OK / malformed-arg / malformed-input / runtime). The
+> `not authorized` sentinel is retired. Retained for history.
 
 # ADR-0009: Session-file security model and sentinel exit behavior
 
