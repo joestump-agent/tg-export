@@ -77,6 +77,18 @@ def _load_tdl_export(input_path: Path) -> adapter.TdlExport:
     return export_from_doc(doc)
 
 
+def _allowed_chat_types() -> frozenset[str]:
+    """The chat classifications the manifest contract accepts.
+
+    Read from the shipped manifest schema (the executable contract, ADR-0004) so an
+    out-of-enum chat type in the tdl doc is rejected as malformed input up front —
+    with the chat named — instead of surfacing as an opaque manifest-schema failure
+    after the NDJSON has already been written.
+    """
+    chat_items = schemas.load_schema("manifest")["properties"]["chats"]["items"]
+    return frozenset(chat_items["properties"]["type"]["enum"])
+
+
 def export_from_doc(doc: dict[str, Any]) -> adapter.TdlExport:
     """Build a :class:`~tg_export.adapter.TdlExport` from a parsed tdl document.
 
@@ -84,24 +96,35 @@ def export_from_doc(doc: dict[str, Any]) -> adapter.TdlExport:
     """
     try:
         account = dict(doc["account"])
+        # The manifest's account block requires an integer id (shipped schema), so
+        # its absence is malformed input here, not a KeyError deep in archive assembly.
+        self_id = int(account["id"])
         entity_index = {
             int(pid): dict(meta) for pid, meta in (doc.get("entities") or {}).items()
         }
-        chats = [
-            adapter.TdlChat(
-                id=int(c["id"]),
-                type=str(c["type"]),
-                title=str(c.get("title") or c["id"]),
-                username=c.get("username"),
-                raw_messages=list(c.get("messages") or []),
+        chats = []
+        for c in doc.get("chats") or []:
+            chat_type = str(c["type"])
+            if chat_type not in _allowed_chat_types():
+                raise MalformedInputError(
+                    f"tg-export: malformed tdl export: chat {c.get('id', '?')}: "
+                    f"unknown chat type {chat_type!r} "
+                    f"(expected one of {sorted(_allowed_chat_types())})"
+                )
+            chats.append(
+                adapter.TdlChat(
+                    id=int(c["id"]),
+                    type=chat_type,
+                    title=str(c.get("title") or c["id"]),
+                    username=c.get("username"),
+                    raw_messages=list(c.get("messages") or []),
+                )
             )
-            for c in doc.get("chats") or []
-        ]
     except (KeyError, TypeError, ValueError) as exc:
         raise MalformedInputError(f"tg-export: malformed tdl export: {exc}") from exc
     return adapter.TdlExport(
         account=account,
-        self_id=int(account["id"]) if account.get("id") is not None else None,
+        self_id=self_id,
         chats=chats,
         entity_index=entity_index,
     )

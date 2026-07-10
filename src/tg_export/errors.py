@@ -37,12 +37,6 @@ class TgExportError(Exception):
         self.context: dict[str, object] = context
 
 
-class MalformedArgumentError(TgExportError):
-    """A missing/invalid argument — a usage mistake by the caller."""
-
-    exit_code = EXIT_MALFORMED_ARG
-
-
 class MalformedInputError(TgExportError):
     """The tdl export is missing, unreadable, or not the expected shape."""
 
@@ -59,10 +53,3 @@ class TransformError(TgExportError):
     """
 
     exit_code = EXIT_RUNTIME
-
-
-def exit_code_for(exc: BaseException) -> int:
-    """Return the CLI exit code for ``exc`` (the single mapping used everywhere)."""
-    if isinstance(exc, TgExportError):
-        return exc.exit_code
-    return EXIT_RUNTIME

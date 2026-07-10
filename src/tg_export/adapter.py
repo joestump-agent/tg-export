@@ -123,7 +123,7 @@ class TdlExport:
 # --- adaptation ---------------------------------------------------------------
 
 
-def _resolve_sender(from_id: int | None, out: bool, entity_index: dict[int, dict[str, Any]]):
+def _resolve_sender(from_id: int | None, entity_index: dict[int, dict[str, Any]]):
     """Build a Telethon-shaped sender from a peer id via the entity index.
 
     Returns ``None`` (the mapper's "Unknown"/id-null degrade) when the id is absent
@@ -168,7 +168,7 @@ def adapt_message(raw: dict[str, Any], *, entity_index: dict[int, dict[str, Any]
         date=date,
         message=raw.get("text") or raw.get("message") or "",
         out=out,
-        sender=_resolve_sender(from_id, out, index),
+        sender=_resolve_sender(from_id, index),
         reply_to_msg_id=raw.get("reply_to_message_id"),
         edit_date=raw.get("edit_date"),
         # TODO(tdl-shape) GATE 1: wire raw["entities"] -> Telethon MessageEntity*

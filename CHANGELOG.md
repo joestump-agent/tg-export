@@ -21,6 +21,9 @@ import). tg-export becomes the fidelity tier that transforms tdl's `--raw` dump.
 - **One command, `transform --input <tdl-export> --output <dir>`** — offline,
   deterministic, no login and no network. The fidelity core (`mapping.py`) and the
   `schema_version: 1` contract are unchanged; only the input source changed.
+- Structurally malformed tdl input (missing `account.id`, an out-of-contract chat
+  `type`) is rejected up front with the dedicated malformed-input exit code `5`
+  instead of surfacing as a generic runtime failure mid-transform.
 
 ### Added
 

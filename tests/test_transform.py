@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from tg_export import jsonio, schemas, transform
-from tg_export.errors import MalformedInputError
+from tg_export import cli, jsonio, schemas, transform
+from tg_export.errors import EXIT_MALFORMED_INPUT, EXIT_OK, MalformedInputError
 
 GENERATED_AT = 1719900000
 
@@ -132,3 +132,43 @@ def test_missing_input_raises_malformed_input(tmp_path: Path):
 def test_malformed_document_raises_malformed_input():
     with pytest.raises(MalformedInputError):
         transform.export_from_doc({"chats": [{"no": "account"}]})
+
+
+def test_account_without_id_raises_malformed_input():
+    # The manifest's account block requires an id; its absence must classify as
+    # malformed input (exit 5), not crash later in archive assembly (exit 1).
+    with pytest.raises(MalformedInputError):
+        transform.export_from_doc({"account": {"username": "x"}, "chats": []})
+
+
+def test_unknown_chat_type_raises_malformed_input():
+    # An out-of-contract chat type is rejected up front, naming the chat — not as
+    # an opaque manifest-schema failure after the NDJSON is already written.
+    doc = {
+        "account": {"id": 1},
+        "chats": [{"id": 5, "type": "broadcast", "messages": []}],
+    }
+    with pytest.raises(MalformedInputError, match="chat 5: unknown chat type 'broadcast'"):
+        transform.export_from_doc(doc)
+
+
+# --- CLI surface (the single `transform` command) -----------------------------
+
+
+def test_cli_transform_happy_path(tmp_path: Path, capsys):
+    src = tmp_path / "tdl-export.json"
+    src.write_text(jsonio.dumps(TDL_DOC), encoding="utf-8")
+    out = tmp_path / "archive"
+    code = cli.main(["transform", "--input", str(src), "--output", str(out)])
+    assert code == EXIT_OK
+    assert (out / "manifest.json").exists()
+    assert (out / "chats" / "1001.ndjson").exists()
+    assert "transformed 1 chats, 3 messages" in capsys.readouterr().err
+
+
+def test_cli_maps_malformed_input_to_its_exit_code(tmp_path: Path, capsys):
+    code = cli.main(
+        ["transform", "--input", str(tmp_path / "nope.json"), "--output", str(tmp_path / "o")]
+    )
+    assert code == EXIT_MALFORMED_INPUT
+    assert "input not found" in capsys.readouterr().err
